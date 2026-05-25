@@ -1,0 +1,163 @@
+# Hệ thống Chat Ngang Hàng P2P
+
+Đồ án môn Các Hệ Thống Phân Tán – Chủ đề 3
+
+---
+
+## Kiến trúc hệ thống
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                     BOOTSTRAP SERVER                             │
+│   • Quản lý registry peer (peer_id → host:port:username)         │
+│   • Heartbeat timeout (60s)                                      │
+│   • Push PEER_JOINED / PEER_LEFT tới tất cả peer                 │
+└──────────────┬───────────────────────────────────────────────────┘
+               │ TCP (register / heartbeat / get_peers)
+    ┌──────────┴──────────┬──────────────────┐
+    ▼                     ▼                  ▼
+┌────────┐          ┌────────┐          ┌────────┐
+│ Peer A │◄────────►│ Peer B │◄────────►│ Peer C │
+│ :9001  │          │ :9002  │          │ :9003  │
+└────────┘          └────────┘          └────────┘
+  TCP trực tiếp – không qua server trung tâm
+```
+
+### Các thành phần
+
+| Module | File | Mô tả |
+|--------|------|-------|
+| Bootstrap Server | `bootstrap/server.py` | Tracker – quản lý danh sách peer |
+| Peer Server | `peer/server.py` | Lắng nghe kết nối đến từ peer khác |
+| Peer Client | `peer/client.py` | Gửi tin & giao tiếp với bootstrap |
+| Peer Manager | `peer/peer_manager.py` | Bộ nhớ trong: danh sách peer, nhóm |
+| Peer Node | `peer/node.py` | Điều phối trung tâm |
+| CLI | `peer/cli.py` | Giao diện dòng lệnh |
+
+---
+
+## Giao thức tin nhắn (Message Protocol)
+
+**Framing**: 4-byte big-endian length prefix + UTF-8 JSON payload
+
+```
+[ 4 bytes: độ dài ] [ N bytes: JSON ]
+```
+
+### Các loại tin nhắn
+
+| Type | Chiều | Mô tả |
+|------|-------|-------|
+| `REGISTER` | Peer → Bootstrap | Đăng ký tham gia mạng |
+| `REGISTER_OK` | Bootstrap → Peer | Xác nhận đăng ký |
+| `HEARTBEAT` | Peer → Bootstrap | Báo hiệu còn sống (mỗi 15s) |
+| `GET_PEERS` | Peer → Bootstrap | Lấy danh sách peer online |
+| `PEER_LIST` | Bootstrap → Peer | Danh sách peer online |
+| `PEER_JOINED` | Bootstrap → Peers | Push: có peer mới tham gia |
+| `PEER_LEFT` | Bootstrap → Peers | Push: có peer rời mạng |
+| `DIRECT_MSG` | Peer → Peer | Tin nhắn trực tiếp 1-1 |
+| `GROUP_MSG` | Peer → Peers | Tin nhắn nhóm |
+| `GROUP_INVITE` | Peer → Peers | Mời tham gia nhóm |
+| `ACK` | Nhận → Gửi | Xác nhận nhận tin |
+
+---
+
+## Yêu cầu
+
+- Python **3.10+**
+- Không cần cài thêm thư viện (chỉ dùng stdlib)
+
+---
+
+## Cài đặt & Chạy
+
+### 1. Khởi động Bootstrap Server
+
+```bash
+cd p2p_chat
+python run_bootstrap.py
+```
+
+Tuỳ chọn:
+```bash
+python run_bootstrap.py --host 0.0.0.0 --port 9000
+```
+
+### 2. Mở nhiều terminal, chạy các peer
+
+**Terminal 2:**
+```bash
+python run_peer.py --username Alice --port 9001
+```
+
+**Terminal 3:**
+```bash
+python run_peer.py --username Bob --port 9002
+```
+
+**Terminal 4:**
+```bash
+python run_peer.py --username Charlie --port 9003
+```
+
+### 3. Sử dụng CLI
+
+```
+>>> list                            # Xem peer đang online
+>>> msg Bob Xin chào!               # Nhắn riêng cho Bob
+>>> group create Team Bob Charlie   # Tạo nhóm "Team" với Bob và Charlie
+>>> group msg Team Họp lúc 3h nhé   # Nhắn vào nhóm Team
+>>> groups                          # Xem danh sách nhóm
+>>> quit                            # Thoát
+```
+
+### 4. Chạy trên nhiều máy tính
+
+Trên máy chủ (bootstrap), mở port 9000:
+```bash
+python run_bootstrap.py --host 0.0.0.0
+```
+
+Trên máy client, chỉ định IP của bootstrap:
+```bash
+python run_peer.py -u Alice -p 9001 --bootstrap-host 192.168.1.100
+```
+
+---
+
+## Tính năng đã triển khai
+
+| Yêu cầu | Trạng thái |
+|---------|-----------|
+| Đăng ký / rời mạng | ✅ |
+| Chat trực tiếp 1-1 | ✅ |
+| Chat nhóm | ✅ |
+| Peer discovery | ✅ |
+| Trạng thái online/offline | ✅ |
+| Truyền tin đáng tin cậy (ACK) | ✅ |
+| Heartbeat & timeout | ✅ |
+| Store-and-forward (offline msg) | ✅ (bonus) |
+| Đa luồng (gửi/nhận đồng thời) | ✅ |
+| Xử lý peer disconnect | ✅ |
+
+---
+
+## Cấu trúc thư mục
+
+```
+p2p_chat/
+├── config.py               Hằng số cấu hình
+├── run_bootstrap.py        Entry point – bootstrap server
+├── run_peer.py             Entry point – peer node
+├── common/
+│   ├── protocol.py         Định nghĩa message, encode/decode
+│   └── utils.py            Tiện ích
+├── bootstrap/
+│   └── server.py           Bootstrap/Tracker server
+└── peer/
+    ├── node.py             Peer node (orchestrator)
+    ├── server.py           TCP server (nhận kết nối)
+    ├── client.py           TCP client (gửi tin)
+    ├── peer_manager.py     Quản lý danh sách peer & nhóm
+    └── cli.py              Giao diện dòng lệnh
+```
