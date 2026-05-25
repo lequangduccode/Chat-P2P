@@ -53,24 +53,33 @@ class PeerServer:
                     log.debug("Accept loop interrupted")
 
     def _handle_conn(self, conn: socket.socket):
+        msg = None
         try:
             msg = recv_msg(conn)
-            if not msg:
+        except Exception as e:
+            log.debug(f"recv error: {e}")
+        finally:
+            if msg is None:
+                conn.close()
                 return
 
-            msg_type = msg.get("type")
+        msg_type = msg.get("type")
 
-            # Gửi ACK ngay cho các loại message cần xác nhận
-            if msg_type in (
-                MsgType.DIRECT_MSG, MsgType.GROUP_MSG,
-                MsgType.GROUP_INVITE, MsgType.PEER_JOINED, MsgType.PEER_LEFT,
-            ):
+        # Gửi ACK — bọc try/except riêng vì sender có thể đã đóng socket
+        # (ví dụ: bootstrap push PEER_JOINED rồi đóng ngay, không chờ ACK)
+        if msg_type in (
+            MsgType.DIRECT_MSG, MsgType.GROUP_MSG,
+            MsgType.GROUP_INVITE, MsgType.PEER_JOINED, MsgType.PEER_LEFT,
+        ):
+            try:
                 conn.sendall(encode_msg(make_msg(MsgType.ACK)))
+            except Exception:
+                pass  # ACK thất bại không ảnh hưởng việc xử lý message
 
-            # Gọi callback (chạy trong thread này, không block accept_loop)
+        conn.close()
+
+        # Xử lý message sau khi đã đóng socket — luôn chạy dù ACK thất bại
+        try:
             self.on_message(msg)
-
         except Exception as e:
-            log.debug(f"Handle error: {e}")
-        finally:
-            conn.close()
+            log.debug(f"on_message error: {e}")

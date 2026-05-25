@@ -83,19 +83,26 @@ class PeerClient:
 
     # ------------------------------------------------------------------ Peer-to-peer
 
-    def send_to_peer(self, host: str, port: int, msg: dict) -> bool:
-        """Gửi một message tới peer, trả về True nếu nhận được ACK."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(CONNECT_TIMEOUT)
-            s.connect((host, port))
-            s.settimeout(RECV_TIMEOUT)
-            s.sendall(encode_msg(msg))
-            resp = recv_msg(s)
-            s.close()
-            return resp is not None and resp.get("type") == MsgType.ACK
-        except Exception:
-            return False
+    def send_to_peer(self, host: str, port: int, msg: dict,
+                     retries: int = 3) -> bool:
+        """Gửi message tới peer, thử lại tối đa `retries` lần, trả về True khi có ACK."""
+        for attempt in range(1, retries + 1):
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(CONNECT_TIMEOUT)
+                s.connect((host, port))
+                s.settimeout(RECV_TIMEOUT)
+                s.sendall(encode_msg(msg))
+                resp = recv_msg(s)
+                s.close()
+                if resp is not None and resp.get("type") == MsgType.ACK:
+                    return True
+            except Exception:
+                pass
+            if attempt < retries:
+                import time
+                time.sleep(0.5 * attempt)   # back-off: 0.5s, 1s
+        return False
 
     # ------------------------------------------------------------------ Store-and-forward
 

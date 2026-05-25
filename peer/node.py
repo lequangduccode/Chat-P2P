@@ -138,6 +138,14 @@ class PeerNode:
         pid, name, host, port = (
             msg["peer_id"], msg["username"], msg["host"], msg["port"]
         )
+        # Nếu peer đã biết nhưng peer_id thay đổi (reconnect sau crash),
+        # chuyển pending messages sang peer_id mới
+        old = self.manager.get_peer_by_name(name)
+        if old and old.peer_id != pid and self.client.has_pending(old.peer_id):
+            with self.client._pending_lock:
+                msgs = self.client._pending.pop(old.peer_id, [])
+                self.client._pending.setdefault(pid, []).extend(msgs)
+
         self.manager.add_peer(pid, name, host, port)
         self._display(f"\n  >> {name} vừa tham gia mạng")
 
@@ -151,7 +159,7 @@ class PeerNode:
 
     def _on_peer_left(self, msg):
         pid, name = msg["peer_id"], msg["username"]
-        self.manager.remove_peer(pid)
+        self.manager.mark_offline(pid)          # giữ lại để store-and-forward
         self._display(f"\n  >> {name} đã rời mạng")
 
     def _on_direct_msg(self, msg):
@@ -198,11 +206,17 @@ class PeerNode:
             timestamp=now_str(),
         )
 
+        # Nếu biết peer đang offline → lưu ngay, không cần thử gửi
+        if not peer.online:
+            self.client.store_offline(peer.peer_id, msg)
+            return (f"'{to_username}' hiện offline. "
+                    "Tin nhắn sẽ được gửi khi họ online trở lại.")
+
         if self.client.send_to_peer(peer.host, peer.port, msg):
             return None
         else:
             self.client.store_offline(peer.peer_id, msg)
-            return (f"'{to_username}' hiện offline. "
+            return (f"'{to_username}' không phản hồi. "
                     "Tin nhắn sẽ được gửi khi họ online trở lại.")
 
     def send_group(self, group_name: str, content: str) -> str | None:
@@ -271,6 +285,34 @@ class PeerNode:
                 self.client.send_to_peer(peer.host, peer.port, invite)
 
         return None
+
+    def broadcast(self, content: str) -> str:
+        """Gửi tin nhắn tới TẤT CẢ peer đang online trong mạng (flood broadcast)."""
+        peers = self.manager.all_peers()
+        if not peers:
+            return "Không có peer nào online để broadcast"
+
+        msg = make_msg(
+            MsgType.DIRECT_MSG,
+            msg_id=new_id(),
+            from_id=self.peer_id,
+            from_name=f"[BROADCAST] {self.username}",
+            to_id="ALL",
+            content=content,
+            timestamp=now_str(),
+        )
+
+        ok, fail = 0, 0
+        for peer in peers:
+            if self.client.send_to_peer(peer.host, peer.port, msg):
+                ok += 1
+            else:
+                fail += 1
+
+        result = f"Đã gửi tới {ok}/{len(peers)} peer"
+        if fail:
+            result += f" ({fail} thất bại)"
+        return result
 
     # ------------------------------------------------------------------
     # Queries for CLI

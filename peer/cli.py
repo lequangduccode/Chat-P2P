@@ -17,6 +17,7 @@ HELP = """
 ├─────────────────────────────────────────────────────────────────┤
 │  list                              Xem peer đang online         │
 │  msg <tên> <nội dung>              Nhắn tin trực tiếp           │
+│  broadcast <nội dung>              Gửi tới TẤT CẢ peer online   │
 │  groups                            Xem danh sách nhóm           │
 │  group create <tên> <p1> [p2 …]   Tạo nhóm mới                 │
 │  group msg <tên_nhóm> <nội dung>   Gửi tin nhóm                 │
@@ -89,6 +90,14 @@ class CLI:
                         self._err(err)
                     else:
                         self._ok(f"→ {to_name}")
+
+            elif cmd == "broadcast":
+                if len(parts) < 2:
+                    self._err("Dùng: broadcast <nội dung>")
+                else:
+                    content = " ".join(parts[1:])
+                    result = self.node.broadcast(content)
+                    self._ok(result)
 
             elif cmd == "groups":
                 self._cmd_groups()

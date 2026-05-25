@@ -14,6 +14,7 @@ class PeerInfo:
     username: str
     host:     str
     port:     int
+    online:   bool = True
 
 
 @dataclass
@@ -46,26 +47,33 @@ class PeerManager:
 
     def add_peer(self, peer_id, username, host, port):
         with self._lock:
-            self._peers[peer_id] = PeerInfo(peer_id, username, host, port)
+            self._peers[peer_id] = PeerInfo(peer_id, username, host, port, online=True)
 
-    def remove_peer(self, peer_id):
+    def mark_offline(self, peer_id):
+        """Đánh dấu offline nhưng GIỮ LẠI trong danh sách để store-and-forward."""
         with self._lock:
-            self._peers.pop(peer_id, None)
+            if peer_id in self._peers:
+                self._peers[peer_id].online = False
 
     def get_peer(self, peer_id) -> PeerInfo | None:
         with self._lock:
             return self._peers.get(peer_id)
 
     def get_peer_by_name(self, username: str) -> PeerInfo | None:
+        """Ưu tiên peer online; nếu không có thì trả về peer offline đã biết."""
         with self._lock:
-            for p in self._peers.values():
-                if p.username.lower() == username.lower():
-                    return p
-        return None
+            online = [p for p in self._peers.values()
+                      if p.username.lower() == username.lower() and p.online]
+            if online:
+                return online[0]
+            offline = [p for p in self._peers.values()
+                       if p.username.lower() == username.lower()]
+            return offline[0] if offline else None
 
     def all_peers(self) -> list[PeerInfo]:
+        """Chỉ trả về peer đang online."""
         with self._lock:
-            return list(self._peers.values())
+            return [p for p in self._peers.values() if p.online]
 
     # ----------------------------------------------------------------- Groups
 
