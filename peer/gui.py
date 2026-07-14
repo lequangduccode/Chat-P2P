@@ -9,13 +9,14 @@ Luồng xử lý mạng (server thread) KHÔNG được đụng trực tiếp wi
 nên mọi cập nhật giao diện đều đi qua root.after(0, ...) cho an toàn luồng.
 """
 
+import os
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, simpledialog
+from tkinter import ttk, scrolledtext, messagebox, simpledialog, filedialog
 
 from peer.node import PeerNode
 from common.protocol import now_str
-from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, DEFAULT_PEER_PORT
+from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, DEFAULT_PEER_PORT, NETWORK_SECRET
 
 
 # Bảng màu
@@ -34,6 +35,7 @@ class ChatGUI:
     def __init__(self):
         self.node: PeerNode | None = None
         self.target = None          # ("peer", username) | ("group", name) | None
+        self.secret = NETWORK_SECRET   # khoá mã hoá mạng (run_gui.py có thể đổi)
 
         self.root = tk.Tk()
         self.root.title("P2P Chat – Nhóm 7")
@@ -99,7 +101,8 @@ class ChatGUI:
 
         def worker():
             node = PeerNode(username=username, port=port,
-                            bootstrap_host=bhost, bootstrap_port=bport)
+                            bootstrap_host=bhost, bootstrap_port=bport,
+                            secret=self.secret)
             ok = False
             try:
                 ok = node.start()
@@ -135,6 +138,8 @@ class ChatGUI:
                  bg=PANEL, fg=FG).pack(side="left", pady=8)
         tk.Label(top, text=f"{self.node.host}:{self.node.port}   ",
                  font=("Segoe UI", 9), bg=PANEL, fg=MUTED).pack(side="right", pady=8)
+        tk.Label(top, text="🔒 Mã hoá: BẬT   ", font=("Segoe UI", 9, "bold"),
+                 bg=PANEL, fg=GREEN).pack(side="right", pady=8)
 
         # ---- Cột trái: peers + groups ----
         left = tk.Frame(self.root, bg=PANEL, width=220)
@@ -196,6 +201,10 @@ class ChatGUI:
                   font=("Segoe UI", 10, "bold"), width=8, cursor="hand2",
                   activebackground="#4752c4",
                   command=self._do_send).pack(side="right", ipady=5)
+        tk.Button(bottom, text="📎 File", bg=INPUT_BG, fg=FG, relief="flat",
+                  font=("Segoe UI", 10), width=7, cursor="hand2",
+                  activebackground=ACCENT,
+                  command=self._do_send_file).pack(side="right", ipady=5, padx=(0, 6))
 
         # Kết nối callback tin nhắn đến + bắt đầu vòng cập nhật
         self.node.set_display(self._on_incoming)
@@ -260,6 +269,22 @@ class ChatGUI:
         result = self.node.broadcast(content.strip())
         self._append(f"[{now_str()}] 📢 Bạn broadcast: {content}  ({result})\n", "cast")
 
+    def _do_send_file(self):
+        if not self.target or self.target[0] != "peer":
+            messagebox.showinfo("Chọn peer", "Hãy chọn MỘT peer bên trái để gửi file.")
+            return
+        name = self.target[1]
+        path = filedialog.askopenfilename(title=f"Chọn file gửi cho {name}",
+                                          parent=self.root)
+        if not path:
+            return
+        err = self.node.send_file(name, path)
+        if err:
+            self._append(f"[{now_str()}] ⚠ {err}\n", "sys")
+        else:
+            self._append(f"[{now_str()}] 📎 Bạn gửi file '{os.path.basename(path)}' "
+                         f"→ {name} (đã mã hoá)\n", "me")
+
     def _dlg_create_group(self):
         peers = self.node.get_online_peers()
         if not peers:
@@ -317,7 +342,8 @@ class ChatGUI:
 
     def _on_incoming(self, text: str):
         t = text.strip("\n")
-        if ">>" in t:                 tag = "sys"
+        if "📎" in t:                 tag = "cast"
+        elif ">>" in t:               tag = "sys"
         elif "→ bạn" in t:            tag = "them"
         elif "BROADCAST" in t:        tag = "cast"
         elif t.startswith("[") and "] [" in t:  tag = "group"

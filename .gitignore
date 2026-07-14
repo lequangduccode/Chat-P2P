@@ -9,3 +9,6 @@ build/
 .env
 .venv
 venv/
+
+# File nhận được qua file-transfer
+downloads/

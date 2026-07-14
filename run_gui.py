@@ -27,7 +27,7 @@ except ImportError:
     sys.exit(1)
 
 from peer.gui import ChatGUI
-from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, DEFAULT_PEER_PORT
+from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, DEFAULT_PEER_PORT, NETWORK_SECRET
 
 
 def main():
@@ -36,9 +36,12 @@ def main():
     parser.add_argument("--port", "-p", type=int, default=DEFAULT_PEER_PORT)
     parser.add_argument("--bootstrap-host", default=BOOTSTRAP_HOST)
     parser.add_argument("--bootstrap-port", type=int, default=BOOTSTRAP_PORT)
+    parser.add_argument("--key", default=NETWORK_SECRET,
+                        help="Khoá mã hoá chung của mạng (mọi peer phải giống nhau)")
     args = parser.parse_args()
 
     gui = ChatGUI()
+    gui.secret = args.key
     # Điền sẵn các trường đăng nhập nếu người dùng truyền tham số dòng lệnh
     if args.username:
         gui.e_user.delete(0, "end"); gui.e_user.insert(0, args.username)

@@ -15,16 +15,20 @@ Giao diện công khai (dùng bởi CLI):
   get_groups()                       -> list[GroupInfo]
 """
 
+import os
+import base64
 import threading
 import time
 import logging
 
 from common.protocol import MsgType, make_msg, new_id, now_str
 from common.utils import get_local_ip
+from common import crypto
 from peer.server import PeerServer
 from peer.client import PeerClient
 from peer.peer_manager import PeerManager
-from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, HEARTBEAT_INTERVAL
+from config import (BOOTSTRAP_HOST, BOOTSTRAP_PORT, HEARTBEAT_INTERVAL,
+                    NETWORK_SECRET, DOWNLOAD_DIR, MAX_FILE_BYTES)
 
 log = logging.getLogger(__name__)
 
@@ -36,11 +40,15 @@ class PeerNode:
         port: int,
         bootstrap_host: str = BOOTSTRAP_HOST,
         bootstrap_port: int = BOOTSTRAP_PORT,
+        secret: str = NETWORK_SECRET,
     ):
         self.peer_id  = new_id()
         self.username = username
         self.host     = get_local_ip()
         self.port     = port
+
+        # Khoá mã hoá dùng chung cho cả mạng (mọi peer cùng passphrase)
+        self._key = crypto.derive_key(secret)
 
         self.manager = PeerManager()
         self.client  = PeerClient(bootstrap_host, bootstrap_port)
@@ -48,6 +56,17 @@ class PeerNode:
 
         self._running = False
         self._display_cb = None    # set bởi CLI
+
+    # ------------------------------------------------------------------
+    # Mã hoá / giải mã nội dung tin nhắn
+    # ------------------------------------------------------------------
+
+    def _enc(self, text: str) -> str:
+        return crypto.encrypt(text, self._key)
+
+    def _dec(self, token: str) -> str:
+        pt = crypto.decrypt(token, self._key)
+        return pt if pt is not None else "⚠[không giải mã được – sai khoá?]"
 
     # ------------------------------------------------------------------
     # Display helper
@@ -129,6 +148,7 @@ class PeerNode:
             MsgType.DIRECT_MSG:   self._on_direct_msg,
             MsgType.GROUP_MSG:    self._on_group_msg,
             MsgType.GROUP_INVITE: self._on_group_invite,
+            MsgType.FILE_MSG:     self._on_file_msg,
         }
         handler = dispatch.get(t)
         if handler:
@@ -165,15 +185,41 @@ class PeerNode:
     def _on_direct_msg(self, msg):
         ts      = msg.get("timestamp", "")
         sender  = msg["from_name"]
-        content = msg["content"]
+        content = self._dec(msg["content"]) if msg.get("enc") else msg["content"]
         self._display(f"\n[{ts}] {sender} → bạn: {content}")
 
     def _on_group_msg(self, msg):
         ts      = msg.get("timestamp", "")
         sender  = msg["from_name"]
         group   = msg["group_name"]
-        content = msg["content"]
+        content = self._dec(msg["content"]) if msg.get("enc") else msg["content"]
         self._display(f"\n[{ts}] [{group}] {sender}: {content}")
+
+    def _on_file_msg(self, msg):
+        """Nhận file: giải mã, lưu vào thư mục downloads/, thông báo."""
+        sender   = msg["from_name"]
+        filename = os.path.basename(msg["filename"])   # chống path traversal
+        ts       = msg.get("timestamp", "")
+        try:
+            raw = base64.b64decode(msg["data"])
+            if msg.get("enc"):
+                raw = crypto.decrypt_bytes(raw, self._key)
+                if raw is None:
+                    self._display(f"\n  >> ⚠ File từ {sender} giải mã thất bại (sai khoá)")
+                    return
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            # tránh ghi đè: thêm hậu tố nếu trùng tên
+            dest = os.path.join(DOWNLOAD_DIR, filename)
+            base, ext = os.path.splitext(dest)
+            i = 1
+            while os.path.exists(dest):
+                dest = f"{base}({i}){ext}"; i += 1
+            with open(dest, "wb") as f:
+                f.write(raw)
+            self._display(f"\n[{ts}] 📎 {sender} gửi file '{filename}' "
+                          f"({len(raw)} bytes) → đã lưu: {dest}")
+        except Exception as e:
+            self._display(f"\n  >> ⚠ Lỗi nhận file từ {sender}: {e}")
 
     def _on_group_invite(self, msg):
         from_name  = msg["from_name"]
@@ -202,7 +248,8 @@ class PeerNode:
             from_id=self.peer_id,
             from_name=self.username,
             to_id=peer.peer_id,
-            content=content,
+            content=self._enc(content),
+            enc=True,
             timestamp=now_str(),
         )
 
@@ -231,7 +278,8 @@ class PeerNode:
             from_name=self.username,
             group_id=group.group_id,
             group_name=group.group_name,
-            content=content,
+            content=self._enc(content),
+            enc=True,
             timestamp=now_str(),
         )
 
@@ -298,7 +346,8 @@ class PeerNode:
             from_id=self.peer_id,
             from_name=f"[BROADCAST] {self.username}",
             to_id="ALL",
-            content=content,
+            content=self._enc(content),
+            enc=True,
             timestamp=now_str(),
         )
 
@@ -313,6 +362,42 @@ class PeerNode:
         if fail:
             result += f" ({fail} thất bại)"
         return result
+
+    def send_file(self, to_username: str, filepath: str) -> str | None:
+        """Gửi 1 file (đã mã hoá) tới peer. Trả None nếu thành công, chuỗi lỗi nếu thất bại."""
+        if not os.path.isfile(filepath):
+            return f"Không tìm thấy file: {filepath}"
+
+        size = os.path.getsize(filepath)
+        if size > MAX_FILE_BYTES:
+            return (f"File quá lớn ({size} bytes). Giới hạn "
+                    f"{MAX_FILE_BYTES // (1024*1024)} MB/file.")
+
+        peer = self.manager.get_peer_by_name(to_username)
+        if not peer:
+            return f"Không tìm thấy peer '{to_username}'"
+        if not peer.online:
+            return f"'{to_username}' đang offline – chưa hỗ trợ gửi file offline."
+
+        with open(filepath, "rb") as f:
+            raw = f.read()
+
+        enc = crypto.encrypt_bytes(raw, self._key)
+        msg = make_msg(
+            MsgType.FILE_MSG,
+            msg_id=new_id(),
+            from_id=self.peer_id,
+            from_name=self.username,
+            filename=os.path.basename(filepath),
+            size=size,
+            enc=True,
+            data=base64.b64encode(enc).decode("ascii"),
+            timestamp=now_str(),
+        )
+
+        if self.client.send_to_peer(peer.host, peer.port, msg):
+            return None
+        return f"Gửi file tới '{to_username}' thất bại (peer không phản hồi)."
 
     # ------------------------------------------------------------------
     # Queries for CLI

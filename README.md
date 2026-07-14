@@ -124,6 +124,27 @@ Có nút **Tạo nhóm** (chọn thành viên bằng checkbox) và **Broadcast t
 >>> quit                            # Thoát
 ```
 
+### 3c. Chức năng nâng cao
+
+**🔐 Mã hoá tin nhắn** — mọi tin nhắn/​file giữa các peer được mã hoá bằng
+sơ đồ *encrypt-then-MAC* (PBKDF2 + keystream HMAC-SHA256, chỉ dùng stdlib).
+Các peer phải dùng chung khoá; đổi khoá bằng `--key`:
+```bash
+python run_gui.py -u Alice -p 9001 --key bem-mat-nhom7
+python run_peer.py -u Bob -p 9002 --key bem-mat-nhom7
+```
+Peer dùng sai khoá sẽ nhận `⚠[không giải mã được]`. GUI hiển thị `🔒 Mã hoá: BẬT`.
+
+**📎 File transfer** — trong GUI, chọn 1 peer → nút **📎 File** → chọn file
+(≤ 5 MB). File được mã hoá, gửi trực tiếp peer→peer, lưu vào `downloads/`.
+
+**🔄 Mô phỏng churn** — tạo các bot tự vào/ra mạng liên tục để kiểm thử
+tính chịu lỗi (chạy song song với các peer GUI thật):
+```bash
+python churn_sim.py --peers 3 --duration 60
+python churn_sim.py --peers 5 --duration 120 --bootstrap-host 172.17.9.8
+```
+
 ### 4. Chạy trên nhiều máy tính
 
 Trên máy chủ (bootstrap), mở port 9000:
@@ -150,6 +171,11 @@ python run_peer.py -u Alice -p 9001 --bootstrap-host 192.168.1.100
 | Truyền tin đáng tin cậy (ACK) | ✅ |
 | Heartbeat & timeout | ✅ |
 | Store-and-forward (offline msg) | ✅ (bonus) |
+| Broadcast toàn mạng | ✅ (bonus) |
+| Mã hoá tin nhắn (encryption) | ✅ (bonus) |
+| File transfer giữa các peer | ✅ (bonus) |
+| Giao diện GUI (Tkinter) | ✅ (bonus) |
+| Mô phỏng churn | ✅ (bonus) |
 | Đa luồng (gửi/nhận đồng thời) | ✅ |
 | Xử lý peer disconnect | ✅ |
 
@@ -162,8 +188,10 @@ p2p_chat/
 ├── config.py               Hằng số cấu hình
 ├── run_bootstrap.py        Entry point – bootstrap server
 ├── run_peer.py             Entry point – peer node
+├── churn_sim.py            Mô phỏng churn (bot join/leave liên tục)
 ├── common/
 │   ├── protocol.py         Định nghĩa message, encode/decode
+│   ├── crypto.py           Mã hoá tin nhắn (PBKDF2 + HMAC, stdlib)
 │   └── utils.py            Tiện ích
 ├── bootstrap/
 │   └── server.py           Bootstrap/Tracker server

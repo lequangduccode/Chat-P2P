@@ -68,7 +68,7 @@ class PeerServer:
         # Gửi ACK — bọc try/except riêng vì sender có thể đã đóng socket
         # (ví dụ: bootstrap push PEER_JOINED rồi đóng ngay, không chờ ACK)
         if msg_type in (
-            MsgType.DIRECT_MSG, MsgType.GROUP_MSG,
+            MsgType.DIRECT_MSG, MsgType.GROUP_MSG, MsgType.FILE_MSG,
             MsgType.GROUP_INVITE, MsgType.PEER_JOINED, MsgType.PEER_LEFT,
         ):
             try:

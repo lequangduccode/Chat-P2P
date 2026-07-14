@@ -202,6 +202,77 @@ check("Retry có back-off delay (>= 0.5s)", elapsed >= 0.5,
       f"elapsed={elapsed:.2f}s")
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Test 8: Mã hoá tin nhắn (encryption)
+# ──────────────────────────────────────────────────────────────────────────────
+print("\n[8] Mã hoá tin nhắn")
+
+from common import crypto
+
+key = crypto.derive_key("mat-khau-demo")
+token = crypto.encrypt("Bí mật 123", key)
+check("Ciphertext khác plaintext", token != "Bí mật 123")
+check("Giải mã đúng khoá khôi phục plaintext", crypto.decrypt(token, key) == "Bí mật 123")
+check("Sai khoá -> None", crypto.decrypt(token, crypto.derive_key("khoa-sai")) is None)
+
+tampered = token[:-2] + ("AA" if not token.endswith("AA") else "BB")
+check("Dữ liệu bị sửa -> None (xác thực HMAC)", crypto.decrypt(tampered, key) is None)
+
+# Tin nhắn trực tiếp thực sự được mã hoá trên đường truyền
+enc_seen = []
+node_bob.set_display(lambda text: enc_seen.append(text))
+orig_send = node_alice.client.send_to_peer
+sniff = {}
+def _sniff(host, port, msg, retries=3):
+    if msg.get("type") == MsgType.DIRECT_MSG:
+        sniff["content"] = msg.get("content"); sniff["enc"] = msg.get("enc")
+    return orig_send(host, port, msg, retries)
+node_alice.client.send_to_peer = _sniff
+node_alice.send_direct("Bob", "TOI-MAT-KHAU-XYZ")
+time.sleep(0.3)
+node_alice.client.send_to_peer = orig_send
+check("Nội dung gửi đi đã bị mã hoá (không lộ plaintext)",
+      sniff.get("enc") is True and "TOI-MAT-KHAU-XYZ" not in str(sniff.get("content")))
+check("Bên nhận giải mã lại đúng nội dung",
+      any("TOI-MAT-KHAU-XYZ" in m for m in enc_seen))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 9: File transfer giữa 2 peer
+# ──────────────────────────────────────────────────────────────────────────────
+print("\n[9] File transfer")
+
+import config as _cfg
+file_events = []
+node_bob.set_display(lambda text: file_events.append(text))
+
+tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_test_upload.txt")
+payload = "Noi dung file test 12345\n" * 20
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(payload)
+
+err = node_alice.send_file("Bob", tmp)
+check("send_file trả về None (thành công)", err is None, str(err))
+time.sleep(0.4)
+check("Bob nhận được thông báo file", any("📎" in e for e in file_events),
+      f"events: {file_events}")
+
+# Kiểm tra file đã lưu và nội dung khớp
+saved = None
+if os.path.isdir(_cfg.DOWNLOAD_DIR):
+    for fn in os.listdir(_cfg.DOWNLOAD_DIR):
+        if fn.startswith("_test_upload"):
+            p = os.path.join(_cfg.DOWNLOAD_DIR, fn)
+            if open(p, encoding="utf-8").read() == payload:
+                saved = p
+check("File lưu ra đĩa và nội dung khớp (đã giải mã)", saved is not None)
+
+# dọn file tạm
+try:
+    os.remove(tmp)
+    if saved: os.remove(saved)
+except Exception:
+    pass
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Cleanup
 # ──────────────────────────────────────────────────────────────────────────────
 node_alice.stop()

@@ -26,6 +26,7 @@ class MsgType:
     DIRECT_MSG    = "DIRECT_MSG"
     GROUP_MSG     = "GROUP_MSG"
     GROUP_INVITE  = "GROUP_INVITE"
+    FILE_MSG      = "FILE_MSG"
 
     # Generic
     ACK           = "ACK"
