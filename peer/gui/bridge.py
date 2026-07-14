@@ -12,6 +12,11 @@ class NodeBridge(QObject):
     peer_left = Signal(dict)
     group_invite = Signal(dict)
     system_notice = Signal(str)
+    file_offer = Signal(dict)
+    file_progress = Signal(dict)
+    file_completed = Signal(dict)
+    file_failed = Signal(dict)
+    file_rejected = Signal(dict)
 
     def __init__(self, node):
         super().__init__()
@@ -51,3 +56,10 @@ class NodeBridge(QObject):
         self.node._on_group_msg = on_group
         self.node._on_group_invite = on_invite
         self.node.set_display(self.system_notice.emit)
+        self.node.file_transfer.set_callbacks(
+            offer=self.file_offer.emit,
+            progress=self.file_progress.emit,
+            completed=self.file_completed.emit,
+            failed=self.file_failed.emit,
+            rejected=self.file_rejected.emit,
+        )

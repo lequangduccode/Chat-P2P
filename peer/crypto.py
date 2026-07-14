@@ -63,6 +63,27 @@ class MessageCrypto:
         )
         return "|".join(fields).encode("utf-8")
 
+
+    def encrypt_bytes(self, plaintext: bytes, aad: bytes = b"") -> bytes:
+        """Encrypt one binary block as nonce || ciphertext || GCM tag."""
+        if not isinstance(plaintext, (bytes, bytearray)):
+            raise TypeError("plaintext phải là bytes")
+        nonce = os.urandom(12)
+        return nonce + self._aes.encrypt(nonce, bytes(plaintext), aad)
+
+    def decrypt_bytes(self, packet: bytes, aad: bytes = b"") -> bytes:
+        """Decrypt and authenticate one binary block."""
+        if not isinstance(packet, (bytes, bytearray)) or len(packet) < 29:
+            raise MessageDecryptionError("Chunk mã hóa không hợp lệ")
+        nonce = bytes(packet[:12])
+        ciphertext = bytes(packet[12:])
+        try:
+            return self._aes.decrypt(nonce, ciphertext, aad)
+        except InvalidTag as exc:
+            raise MessageDecryptionError(
+                "Không thể giải mã chunk: khóa không khớp hoặc dữ liệu đã bị thay đổi"
+            ) from exc
+
     def encrypt_content(self, message: dict) -> dict:
         """Return a copy with `content` replaced by authenticated ciphertext."""
         if message.get("encrypted"):

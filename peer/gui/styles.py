@@ -364,4 +364,81 @@ QLabel#unreadBadge {
     font-weight: 800;
 }
 
+
+QPushButton#attachButton {
+    background: #eef3fb;
+    color: #315baf;
+    border: 1px solid #d8e2f2;
+    border-radius: 12px;
+    padding: 0;
+    font-size: 19px;
+}
+QPushButton#attachButton:hover { background: #e0e9f7; }
+QPushButton#attachButton:disabled {
+    background: #f2f4f7;
+    color: #b7c0ce;
+    border-color: #e4e7ec;
+}
+QWidget#fileTransferRow { background: transparent; }
+QFrame#incomingFileCard {
+    background: #ffffff;
+    border: 1px solid #dfe7f1;
+    border-radius: 16px;
+}
+QFrame#outgoingFileCard {
+    background: #eaf1ff;
+    border: 1px solid #bfd3fb;
+    border-radius: 16px;
+}
+QLabel#fileIcon {
+    background: #ffffff;
+    border: 1px solid #d9e4f5;
+    border-radius: 10px;
+    font-size: 20px;
+}
+QLabel#fileName {
+    background: transparent;
+    border: none;
+    color: #172033;
+    font-weight: 750;
+}
+QLabel#fileMeta, QLabel#fileStatus {
+    background: transparent;
+    border: none;
+    color: #667085;
+    font-size: 11px;
+}
+QLabel#fileStatusError {
+    background: transparent;
+    border: none;
+    color: #d92d20;
+    font-size: 11px;
+}
+QProgressBar#fileProgress {
+    min-height: 7px;
+    max-height: 7px;
+    background: #dce5f2;
+    border: none;
+    border-radius: 3px;
+}
+QProgressBar#fileProgress::chunk {
+    background: #2f6fed;
+    border-radius: 3px;
+}
+QPushButton#fileCancelButton, QPushButton#fileOpenButton {
+    min-height: 16px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+}
+QPushButton#fileCancelButton {
+    background: #fff1f0;
+    color: #b42318;
+    border: 1px solid #fecdca;
+}
+QPushButton#fileOpenButton {
+    background: #2f6fed;
+    color: #ffffff;
+}
+
 """

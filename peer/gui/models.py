@@ -18,6 +18,13 @@ class ChatMessage:
     timestamp: str
     outgoing: bool = False
     status: str = "sent"
+    kind: str = "text"
+    transfer_id: str = ""
+    file_name: str = ""
+    file_size: int = 0
+    transferred: int = 0
+    local_path: str = ""
+    error: str = ""
 
 
 @dataclass(slots=True)

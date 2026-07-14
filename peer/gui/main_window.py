@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMessageBox, QPushButton, QScrollArea,
-    QSplitter, QVBoxLayout, QWidget
+    QSplitter, QVBoxLayout, QWidget, QFileDialog
 )
 
 from peer.gui.bridge import NodeBridge
@@ -14,6 +16,7 @@ from peer.gui.group_service import add_members_to_group
 from peer.gui.models import ChatMessage, Conversation, ConversationType, current_time
 from peer.gui.widgets.conversation_item import ConversationItem
 from peer.gui.widgets.message_bubble import MessageBubble
+from peer.gui.widgets.file_transfer_card import FileTransferCard
 
 
 class MainWindow(QMainWindow):
@@ -188,6 +191,14 @@ class MainWindow(QMainWindow):
         compose = QHBoxLayout(composer)
         compose.setContentsMargins(20, 14, 20, 16)
         compose.setSpacing(10)
+        self.attach_button = QPushButton("📎")
+        self.attach_button.setObjectName("attachButton")
+        self.attach_button.setToolTip("Gửi file trực tiếp (tối đa 100 MB)")
+        self.attach_button.setFixedSize(46, 46)
+        self.attach_button.clicked.connect(self.choose_file)
+        self.attach_button.setEnabled(False)
+        compose.addWidget(self.attach_button)
+
         self.message_edit = QLineEdit()
         self.message_edit.setMinimumHeight(46)
         self.message_edit.setPlaceholderText("Nhập tin nhắn... (Enter để gửi)")
@@ -215,6 +226,11 @@ class MainWindow(QMainWindow):
         self.bridge.peer_left.connect(lambda _: self.refresh_peer_state())
         self.bridge.group_invite.connect(lambda _: self.refresh_peer_state(update_header=True))
         self.bridge.system_notice.connect(self.on_system_notice)
+        self.bridge.file_offer.connect(self.on_file_offer)
+        self.bridge.file_progress.connect(self.on_file_progress)
+        self.bridge.file_completed.connect(self.on_file_completed)
+        self.bridge.file_failed.connect(self.on_file_failed)
+        self.bridge.file_rejected.connect(self.on_file_rejected)
 
     def _create_shortcuts(self):
         refresh = QAction(self)
@@ -310,6 +326,9 @@ class MainWindow(QMainWindow):
         self.manage_members_button.setVisible(conv.conversation_type == ConversationType.GROUP)
         self.message_edit.setEnabled(True)
         self.send_button.setEnabled(True)
+        self.attach_button.setEnabled(
+            conv.conversation_type == ConversationType.DIRECT and conv.online
+        )
 
         while self.message_layout.count() > 1:
             item = self.message_layout.takeAt(0)
@@ -317,9 +336,17 @@ class MainWindow(QMainWindow):
             if widget:
                 widget.deleteLater()
         for msg in conv.messages:
+            if msg.kind == "file":
+                widget = FileTransferCard(msg)
+                widget.cancel_requested.connect(self.node.cancel_file)
+                widget.open_requested.connect(self.open_local_file)
+            else:
+                widget = MessageBubble(
+                    msg.sender, msg.content, msg.timestamp, msg.outgoing, msg.status
+                )
             self.message_layout.insertWidget(
                 self.message_layout.count() - 1,
-                MessageBubble(msg.sender, msg.content, msg.timestamp, msg.outgoing, msg.status),
+                widget,
             )
         QTimer.singleShot(0, self._scroll_to_bottom)
 
@@ -386,6 +413,165 @@ class MainWindow(QMainWindow):
         if self.active_id == cid:
             self.render_active_conversation()
         self.statusBar().showMessage(f"Tin nhắn mới trong nhóm {name}", 4000)
+
+
+    def choose_file(self):
+        if not self.active_id:
+            return
+        conv = self.conversations.get(self.active_id)
+        if not conv or conv.conversation_type != ConversationType.DIRECT:
+            QMessageBox.information(
+                self, "Chưa hỗ trợ", "Hiện tại file transfer chỉ hỗ trợ chat trực tiếp."
+            )
+            return
+        if not conv.online:
+            QMessageBox.warning(
+                self, "Peer offline", "File chỉ có thể truyền khi peer nhận đang online."
+            )
+            return
+        file_path, _ = QFileDialog.getOpenFileName(self, "Chọn file cần gửi")
+        if not file_path:
+            return
+        transfer_id, error = self.node.send_file(conv.title, file_path)
+        if error:
+            QMessageBox.warning(self, "Không thể gửi file", error)
+            return
+
+        from pathlib import Path
+        path = Path(file_path)
+        conv.messages.append(ChatMessage(
+            conv.conversation_id,
+            conv.conversation_type,
+            self.node.username,
+            "",
+            current_time(),
+            outgoing=True,
+            status="preparing",
+            kind="file",
+            transfer_id=transfer_id or "",
+            file_name=path.name,
+            file_size=path.stat().st_size,
+            local_path=str(path),
+        ))
+        self.render_active_conversation()
+        self.statusBar().showMessage("Đang chuẩn bị file để gửi…", 4000)
+
+    def on_file_offer(self, offer: dict):
+        sender = offer.get("from_name", "Unknown")
+        filename = offer.get("filename", "file")
+        size = int(offer.get("size", 0))
+        transfer_id = offer.get("transfer_id", "")
+        answer = QMessageBox.question(
+            self,
+            "Yêu cầu nhận file",
+            f"{sender} muốn gửi file:\\n\\n{filename}\\n"
+            f"Kích thước: {self._human_size(size)}\\n"
+            f"Mã hóa: AES-256-GCM\\n\\nBạn có muốn nhận không?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            self.node.reject_file(transfer_id)
+            return
+
+        default_path = str(Path.home() / "Downloads" / filename)
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu file nhận được", default_path
+        )
+        if not save_path:
+            self.node.reject_file(transfer_id, "Người nhận không chọn nơi lưu")
+            return
+
+        error = self.node.accept_file(transfer_id, save_path)
+        if error:
+            QMessageBox.warning(self, "Không thể nhận file", error)
+            return
+
+        cid = f"direct:{sender.lower()}"
+        conv = self.conversations.get(cid)
+        if conv is None:
+            conv = Conversation(cid, sender, ConversationType.DIRECT, "Đang nhận file")
+            self.conversations[cid] = conv
+        conv.messages.append(ChatMessage(
+            cid,
+            ConversationType.DIRECT,
+            sender,
+            "",
+            offer.get("timestamp", current_time()),
+            outgoing=False,
+            status="waiting",
+            kind="file",
+            transfer_id=transfer_id,
+            file_name=filename,
+            file_size=size,
+            local_path=save_path,
+        ))
+        if self.active_id != cid:
+            conv.unread += 1
+        self.refresh_lists()
+        if self.active_id == cid:
+            self.render_active_conversation()
+
+    def _find_transfer_message(self, transfer_id: str):
+        for conv in self.conversations.values():
+            for message in conv.messages:
+                if message.kind == "file" and message.transfer_id == transfer_id:
+                    return conv, message
+        return None, None
+
+    def on_file_progress(self, payload: dict):
+        conv, message = self._find_transfer_message(payload.get("transfer_id", ""))
+        if not message:
+            return
+        message.status = payload.get("status", message.status)
+        message.transferred = int(payload.get("transferred", message.transferred))
+        message.local_path = payload.get("local_path", message.local_path)
+        if self.active_id == conv.conversation_id:
+            self.render_active_conversation()
+        percent = int(100 * message.transferred / max(1, message.file_size))
+        self.statusBar().showMessage(
+            f"{message.file_name}: {percent}% — {message.status}", 2500
+        )
+
+    def on_file_completed(self, payload: dict):
+        conv, message = self._find_transfer_message(payload.get("transfer_id", ""))
+        if not message:
+            return
+        message.status = "completed"
+        message.transferred = message.file_size
+        message.local_path = payload.get("local_path", message.local_path)
+        if self.active_id == conv.conversation_id:
+            self.render_active_conversation()
+        self.statusBar().showMessage(
+            f"Truyền file hoàn tất: {message.file_name}", 6000
+        )
+
+    def on_file_failed(self, payload: dict):
+        conv, message = self._find_transfer_message(payload.get("transfer_id", ""))
+        if not message:
+            return
+        message.status = payload.get("status", "failed")
+        if message.status not in {"cancelled", "rejected"}:
+            message.status = "failed"
+        message.error = payload.get("error", "Truyền file thất bại")
+        if self.active_id == conv.conversation_id:
+            self.render_active_conversation()
+        self.statusBar().showMessage(message.error, 7000)
+
+    def on_file_rejected(self, payload: dict):
+        payload = dict(payload)
+        payload["status"] = "rejected"
+        payload["error"] = payload.get("reason", "Người nhận từ chối")
+        self.on_file_failed(payload)
+
+    def open_local_file(self, path: str):
+        if path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    @staticmethod
+    def _human_size(size: int) -> str:
+        from peer.file_transfer.manager import human_size
+        return human_size(size)
 
     def on_system_notice(self, text: str):
         clean = " ".join(text.split())

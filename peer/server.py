@@ -1,23 +1,32 @@
-"""
-PeerServer – TCP server lắng nghe kết nối đến từ peer khác hoặc bootstrap.
-Mỗi kết nối được xử lý trong một thread riêng.
-Gọi callback on_message(msg) khi nhận được tin nhắn.
-"""
+"""PeerServer – TCP server for chat/control messages."""
+from __future__ import annotations
 
+import logging
 import socket
 import threading
-import logging
 
-from common.protocol import MsgType, make_msg, encode_msg, recv_msg
+from common.protocol import MsgType, encode_msg, make_msg, recv_msg
 
 log = logging.getLogger(__name__)
+
+_ACK_TYPES = {
+    MsgType.DIRECT_MSG,
+    MsgType.GROUP_MSG,
+    MsgType.GROUP_INVITE,
+    MsgType.PEER_JOINED,
+    MsgType.PEER_LEFT,
+    "FILE_OFFER",
+    "FILE_ACCEPT",
+    "FILE_REJECT",
+    "FILE_CANCEL",
+}
 
 
 class PeerServer:
     def __init__(self, host: str, port: int, on_message):
         self.host = host
         self.port = port
-        self.on_message = on_message   # callable(msg: dict)
+        self.on_message = on_message
         self._sock: socket.socket | None = None
         self.running = False
 
@@ -28,22 +37,20 @@ class PeerServer:
         self._sock.listen(50)
         self.running = True
         threading.Thread(target=self._accept_loop, daemon=True).start()
-        log.info(f"Peer server đang lắng nghe {self.host}:{self.port}")
+        log.info("Peer server đang lắng nghe %s:%s", self.host, self.port)
 
     def stop(self):
         self.running = False
         if self._sock:
             try:
                 self._sock.close()
-            except Exception:
+            except OSError:
                 pass
-
-    # ------------------------------------------------------------------
 
     def _accept_loop(self):
         while self.running:
             try:
-                conn, addr = self._sock.accept()
+                conn, _ = self._sock.accept()
                 conn.settimeout(10)
                 threading.Thread(
                     target=self._handle_conn, args=(conn,), daemon=True
@@ -53,33 +60,25 @@ class PeerServer:
                     log.debug("Accept loop interrupted")
 
     def _handle_conn(self, conn: socket.socket):
-        msg = None
         try:
             msg = recv_msg(conn)
-        except Exception as e:
-            log.debug(f"recv error: {e}")
-        finally:
             if msg is None:
-                conn.close()
                 return
-
-        msg_type = msg.get("type")
-
-        # Gửi ACK — bọc try/except riêng vì sender có thể đã đóng socket
-        # (ví dụ: bootstrap push PEER_JOINED rồi đóng ngay, không chờ ACK)
-        if msg_type in (
-            MsgType.DIRECT_MSG, MsgType.GROUP_MSG,
-            MsgType.GROUP_INVITE, MsgType.PEER_JOINED, MsgType.PEER_LEFT,
-        ):
+            if msg.get("type") in _ACK_TYPES:
+                try:
+                    conn.sendall(encode_msg(make_msg(MsgType.ACK)))
+                except OSError:
+                    pass
+        except Exception as exc:
+            log.debug("recv error: %s", exc)
+            return
+        finally:
             try:
-                conn.sendall(encode_msg(make_msg(MsgType.ACK)))
-            except Exception:
-                pass  # ACK thất bại không ảnh hưởng việc xử lý message
+                conn.close()
+            except OSError:
+                pass
 
-        conn.close()
-
-        # Xử lý message sau khi đã đóng socket — luôn chạy dù ACK thất bại
         try:
             self.on_message(msg)
-        except Exception as e:
-            log.debug(f"on_message error: {e}")
+        except Exception as exc:
+            log.exception("on_message error: %s", exc)

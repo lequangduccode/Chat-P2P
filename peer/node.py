@@ -11,6 +11,9 @@ from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, HEARTBEAT_INTERVAL
 from peer.client import PeerClient
 from peer.crypto import MessageCrypto, MessageDecryptionError
 from peer.peer_manager import PeerManager
+from peer.file_transfer.manager import (
+    FILE_ACCEPT, FILE_CANCEL, FILE_OFFER, FILE_REJECT, FileTransferManager,
+)
 from peer.server import PeerServer
 
 log = logging.getLogger(__name__)
@@ -33,6 +36,7 @@ class PeerNode:
         self.client = PeerClient(bootstrap_host, bootstrap_port, storage_owner=username)
         self.crypto = MessageCrypto(encryption_key)
         self.server = PeerServer(self.host, self.port, self._on_message)
+        self.file_transfer = FileTransferManager(self)
         self._running = False
         self._display_cb = None
 
@@ -60,6 +64,12 @@ class PeerNode:
 
     def stop(self):
         self._running = False
+        for transfer_id in list(self.file_transfer.sessions):
+            session = self.file_transfer.sessions.get(transfer_id)
+            if session and session.status in {
+                "preparing", "waiting", "connecting", "transferring"
+            }:
+                self.file_transfer.cancel(transfer_id)
         self.client.unregister(self.peer_id)
         self.server.stop()
 
@@ -107,6 +117,10 @@ class PeerNode:
             MsgType.DIRECT_MSG: self._on_direct_msg,
             MsgType.GROUP_MSG: self._on_group_msg,
             MsgType.GROUP_INVITE: self._on_group_invite,
+            FILE_OFFER: self.file_transfer.handle_offer,
+            FILE_ACCEPT: self.file_transfer.handle_accept,
+            FILE_REJECT: self.file_transfer.handle_reject,
+            FILE_CANCEL: self.file_transfer.handle_cancel,
         }
         handler = handlers.get(msg.get("type"))
         if handler:
@@ -247,3 +261,17 @@ class PeerNode:
 
     def get_groups(self):
         return self.manager.all_groups()
+
+
+    def send_file(self, to_username: str, file_path: str) -> tuple[str | None, str | None]:
+        """Start an encrypted direct file-transfer offer."""
+        return self.file_transfer.offer_file(to_username, file_path)
+
+    def accept_file(self, transfer_id: str, save_path: str) -> str | None:
+        return self.file_transfer.accept_offer(transfer_id, save_path)
+
+    def reject_file(self, transfer_id: str, reason: str = "Người nhận từ chối"):
+        self.file_transfer.reject_offer(transfer_id, reason)
+
+    def cancel_file(self, transfer_id: str):
+        self.file_transfer.cancel(transfer_id)
