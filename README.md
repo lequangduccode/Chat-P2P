@@ -100,7 +100,20 @@ python run_peer.py --username Bob --port 9002
 python run_peer.py --username Charlie --port 9003
 ```
 
-### 3. Sử dụng CLI
+### 3a. Giao diện đồ hoạ (GUI) — khuyến nghị khi demo
+
+Thay cho CLI, có thể chạy peer bằng cửa sổ Tkinter (không cần cài thêm gì):
+
+```bash
+python run_gui.py                       # nhập tên/cổng trên màn hình đăng nhập
+python run_gui.py -u Alice -p 9001      # hoặc điền sẵn bằng tham số
+python run_gui.py -u Bob   -p 9002
+```
+
+Trong cửa sổ: chọn peer/nhóm ở cột trái → gõ tin nhắn → **Gửi**.
+Có nút **Tạo nhóm** (chọn thành viên bằng checkbox) và **Broadcast toàn mạng**.
+
+### 3b. Sử dụng CLI
 
 ```
 >>> list                            # Xem peer đang online
@@ -159,5 +172,8 @@ p2p_chat/
     ├── server.py           TCP server (nhận kết nối)
     ├── client.py           TCP client (gửi tin)
     ├── peer_manager.py     Quản lý danh sách peer & nhóm
-    └── cli.py              Giao diện dòng lệnh
+    ├── cli.py              Giao diện dòng lệnh
+    └── gui.py              Giao diện đồ hoạ (Tkinter)
 ```
+
+Ngoài `run_bootstrap.py` và `run_peer.py` (CLI), còn có `run_gui.py` (GUI).
