@@ -9,6 +9,7 @@ from common.protocol import MsgType, make_msg, new_id, now_str
 from common.utils import get_local_ip
 from config import BOOTSTRAP_HOST, BOOTSTRAP_PORT, HEARTBEAT_INTERVAL
 from peer.client import PeerClient
+from peer.churn import ChurnController
 from peer.crypto import MessageCrypto, MessageDecryptionError
 from peer.peer_manager import PeerManager
 from peer.file_transfer.manager import (
@@ -37,7 +38,10 @@ class PeerNode:
         self.crypto = MessageCrypto(encryption_key)
         self.server = PeerServer(self.host, self.port, self._on_message)
         self.file_transfer = FileTransferManager(self)
+        self.churn = ChurnController(self)
         self._running = False
+        self._online = False
+        self._lifecycle_lock = threading.RLock()
         self._display_cb = None
 
     def set_display(self, callback):
@@ -49,40 +53,101 @@ class PeerNode:
         else:
             print(text)
 
+    @property
+    def is_online(self) -> bool:
+        return self._online
+
     def start(self) -> bool:
-        self.server.start()
-        if not self.client.register(self.peer_id, self.username, self.host, self.port):
-            print(f"[!] Không thể kết nối Bootstrap tại {BOOTSTRAP_HOST}:{BOOTSTRAP_PORT}")
-            self.server.stop()
+        with self._lifecycle_lock:
+            if self._running:
+                return self._online
+            self._running = True
+
+        if not self.go_online():
+            self._running = False
             return False
-        self._refresh_peers()
-        self._running = True
+
         threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         threading.Thread(target=self._refresh_loop, daemon=True).start()
-        log.info("Peer '%s' sẵn sàng (id=%s…, %s:%s)", self.username, self.peer_id[:8], self.host, self.port)
+        log.info(
+            "Peer '%s' sẵn sàng (id=%s…, %s:%s)",
+            self.username,
+            self.peer_id[:8],
+            self.host,
+            self.port,
+        )
         return True
 
+    def go_offline(self) -> bool:
+        """Temporarily leave the P2P network while the GUI keeps running."""
+        with self._lifecycle_lock:
+            if not self._online:
+                return True
+
+            for transfer_id in list(self.file_transfer.sessions):
+                session = self.file_transfer.sessions.get(transfer_id)
+                if session and session.status in {
+                    "preparing", "waiting", "connecting", "transferring"
+                }:
+                    self.file_transfer.cancel(transfer_id)
+
+            self.client.unregister(self.peer_id)
+            self.server.stop()
+            self._online = False
+            self._display("\n >> Peer đang offline do mô phỏng churn")
+            return True
+
+    def go_online(self) -> bool:
+        """Open the listening socket and register the same peer again."""
+        with self._lifecycle_lock:
+            if self._online:
+                return True
+
+            try:
+                self.server.start()
+            except OSError as exc:
+                log.warning("Không thể mở peer server: %s", exc)
+                return False
+
+            if not self.client.register(
+                self.peer_id, self.username, self.host, self.port
+            ):
+                self.server.stop()
+                log.warning("Không thể register peer với bootstrap")
+                return False
+
+            self._online = True
+            self._refresh_peers()
+            self._display("\n >> Peer đã online lại")
+            return True
+
     def stop(self):
+        self.churn.stop(reconnect=False)
         self._running = False
+
         for transfer_id in list(self.file_transfer.sessions):
             session = self.file_transfer.sessions.get(transfer_id)
             if session and session.status in {
                 "preparing", "waiting", "connecting", "transferring"
             }:
                 self.file_transfer.cancel(transfer_id)
-        self.client.unregister(self.peer_id)
-        self.server.stop()
+
+        with self._lifecycle_lock:
+            if self._online:
+                self.client.unregister(self.peer_id)
+            self._online = False
+            self.server.stop()
 
     def _heartbeat_loop(self):
         while self._running:
             time.sleep(HEARTBEAT_INTERVAL)
-            if self._running and not self.client.heartbeat(self.peer_id):
+            if self._running and self._online and not self.client.heartbeat(self.peer_id):
                 log.warning("Heartbeat thất bại")
 
     def _refresh_loop(self):
         while self._running:
             time.sleep(30)
-            if self._running:
+            if self._running and self._online:
                 self._refresh_peers()
 
     def _refresh_peers(self):
@@ -157,6 +222,8 @@ class PeerNode:
         )
 
     def send_direct(self, to_username: str, content: str) -> str | None:
+        if not self._online:
+            return "Peer hiện offline do mô phỏng churn."
         peer = self.manager.get_peer_by_name(to_username)
         if not peer:
             return f"Không tìm thấy peer '{to_username}'"
@@ -179,6 +246,8 @@ class PeerNode:
         return f"'{to_username}' không phản hồi. Tin nhắn đã được lưu bền vững."
 
     def send_group(self, group_name: str, content: str) -> str | None:
+        if not self._online:
+            return "Peer hiện offline do mô phỏng churn."
         group = self.manager.get_group_by_name(group_name)
         if not group:
             return f"Không tìm thấy nhóm '{group_name}'"
@@ -208,6 +277,8 @@ class PeerNode:
         return None
 
     def create_group(self, group_name: str, member_names: list) -> str | None:
+        if not self._online:
+            return "Peer hiện offline do mô phỏng churn."
         group_id = new_id()
         members = [self.peer_id]
         peers = []
@@ -236,6 +307,8 @@ class PeerNode:
         return None
 
     def broadcast(self, content: str) -> str:
+        if not self._online:
+            return "Peer hiện offline do mô phỏng churn."
         peers = self.manager.all_peers()
         if not peers:
             return "Không có peer nào online để broadcast"
@@ -265,6 +338,8 @@ class PeerNode:
 
     def send_file(self, to_username: str, file_path: str) -> tuple[str | None, str | None]:
         """Start an encrypted direct file-transfer offer."""
+        if not self._online:
+            return None, "Peer hiện offline do mô phỏng churn."
         return self.file_transfer.offer_file(to_username, file_path)
 
     def accept_file(self, transfer_id: str, save_path: str) -> str | None:

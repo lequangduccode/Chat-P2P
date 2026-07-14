@@ -441,4 +441,49 @@ QPushButton#fileOpenButton {
     color: #ffffff;
 }
 
+
+QDialog#churnDialog { background: #f6f8fc; }
+QFrame#churnStatusCard {
+    background: #ffffff;
+    border: 1px solid #e0e7f0;
+    border-radius: 14px;
+}
+QLabel#churnOnlineDot { color: #17a35b; font-size: 18px; }
+QLabel#churnOfflineDot { color: #e5484d; font-size: 18px; }
+QLabel#churnStatusTitle {
+    color: #172033;
+    font-size: 14px;
+    font-weight: 750;
+}
+QLabel#churnStatusDetail { color: #667085; font-size: 12px; }
+QCheckBox#churnJitterCheck { spacing: 8px; color: #344054; }
+QCheckBox#churnJitterCheck::indicator { width: 18px; height: 18px; }
+QCheckBox#churnJitterCheck::indicator:unchecked {
+    background: #ffffff;
+    border: 1px solid #b8c5d6;
+    border-radius: 5px;
+}
+QCheckBox#churnJitterCheck::indicator:checked {
+    background: #2f6fed;
+    border: 1px solid #2f6fed;
+    border-radius: 5px;
+}
+QSpinBox {
+    background: #ffffff;
+    border: 1px solid #d6dfeb;
+    border-radius: 9px;
+    padding: 7px 10px;
+    min-width: 120px;
+}
+QSpinBox:focus { border: 1px solid #2f6fed; }
+QPlainTextEdit#churnLog {
+    background: #101828;
+    color: #d7e4ff;
+    border: 1px solid #263754;
+    border-radius: 12px;
+    padding: 10px;
+    font-family: "Cascadia Mono", "Consolas";
+    font-size: 12px;
+}
+
 """

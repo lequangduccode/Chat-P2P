@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from peer.gui.bridge import NodeBridge
+from peer.gui.churn_dialog import ChurnDialog
 from peer.gui.dialogs import BroadcastDialog, CreateGroupDialog, ManageGroupMembersDialog
 from peer.gui.group_service import add_members_to_group
 from peer.gui.models import ChatMessage, Conversation, ConversationType, current_time
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
         self.refresh_timer.setTimerType(Qt.CoarseTimer)
         self.refresh_timer.timeout.connect(self.refresh_peer_state)
         self.refresh_timer.start(6000)
+        self.churn_dialog: ChurnDialog | None = None
 
     def _build_ui(self):
         splitter = QSplitter(Qt.Horizontal)
@@ -98,9 +100,15 @@ class MainWindow(QMainWindow):
         broadcast_btn = QPushButton("Broadcast")
         broadcast_btn.setObjectName("secondary")
         broadcast_btn.clicked.connect(self.open_broadcast)
+
+        self.churn_button = QPushButton("Mô phỏng churn")
+        self.churn_button.setObjectName("secondary")
+        self.churn_button.clicked.connect(self.open_churn_dialog)
+
         side.addWidget(direct_btn)
         side.addWidget(group_btn)
         side.addWidget(broadcast_btn)
+        side.addWidget(self.churn_button)
         side.addStretch(1)
 
         network = QLabel("BOOTSTRAP\nRegistry + Discovery\n\nP2P CHANNEL\nDirect TCP + ACK")
@@ -231,6 +239,9 @@ class MainWindow(QMainWindow):
         self.bridge.file_completed.connect(self.on_file_completed)
         self.bridge.file_failed.connect(self.on_file_failed)
         self.bridge.file_rejected.connect(self.on_file_rejected)
+        self.bridge.churn_state.connect(self.on_churn_state)
+        self.bridge.churn_log.connect(self.on_churn_log)
+        self.bridge.churn_finished.connect(self.on_churn_finished)
 
     def _create_shortcuts(self):
         refresh = QAction(self)
@@ -414,6 +425,109 @@ class MainWindow(QMainWindow):
             self.render_active_conversation()
         self.statusBar().showMessage(f"Tin nhắn mới trong nhóm {name}", 4000)
 
+
+    def open_churn_dialog(self):
+        if self.churn_dialog is None:
+            self.churn_dialog = ChurnDialog(self)
+            self.churn_dialog.start_requested.connect(self.start_churn)
+            self.churn_dialog.stop_requested.connect(self.stop_churn)
+        self.churn_dialog.set_running(self.node.churn.running)
+        self.churn_dialog.show()
+        self.churn_dialog.raise_()
+        self.churn_dialog.activateWindow()
+
+    def start_churn(self, config):
+        error = self.node.churn.start(config)
+        if error:
+            QMessageBox.warning(self, "Không thể chạy churn", error)
+            return
+        if self.churn_dialog:
+            self.churn_dialog.set_running(True)
+            self.churn_dialog.append_log("Đã bắt đầu mô phỏng.")
+        self.churn_button.setText("Churn đang chạy…")
+        self.churn_button.setEnabled(False)
+        self.statusBar().showMessage("Mô phỏng churn đã bắt đầu", 5000)
+
+    def stop_churn(self):
+        self.node.churn.stop(reconnect=True)
+        if self.churn_dialog:
+            self.churn_dialog.append_log(
+                "Đang dừng và khôi phục peer về online…"
+            )
+            self.churn_dialog.stop_button.setEnabled(False)
+
+    def on_churn_state(self, payload: dict):
+        online = bool(payload.get("online"))
+        cycle = payload.get("cycle", 0)
+        total = payload.get("total_cycles", 0)
+
+        if online:
+            self.connection_label.setText(
+                f"● Online\n{self.node.host}:{self.node.port}"
+            )
+            self.connection_label.setStyleSheet(
+                "color:#8ff0b5;font-size:12px;"
+            )
+        else:
+            self.connection_label.setText(
+                f"● Offline — churn\n{self.node.host}:{self.node.port}"
+            )
+            self.connection_label.setStyleSheet(
+                "color:#ffb4ab;font-size:12px;"
+            )
+
+        enabled = online and self.active_id is not None
+        self.message_edit.setEnabled(enabled)
+        self.send_button.setEnabled(enabled)
+
+        conv = self.conversations.get(self.active_id) if self.active_id else None
+        self.attach_button.setEnabled(bool(
+            online
+            and conv
+            and conv.conversation_type == ConversationType.DIRECT
+            and conv.online
+        ))
+
+        if self.churn_dialog:
+            self.churn_dialog.update_state(payload)
+
+        state = "online" if online else "offline"
+        self.statusBar().showMessage(
+            f"Churn vòng {cycle}/{total}: peer {state}", 4000
+        )
+        self.refresh_lists()
+
+    def on_churn_log(self, text: str):
+        if self.churn_dialog:
+            self.churn_dialog.append_log(text)
+
+    def on_churn_finished(self, result: dict):
+        self.churn_button.setText("Mô phỏng churn")
+        self.churn_button.setEnabled(True)
+
+        if self.churn_dialog:
+            self.churn_dialog.finish(result)
+
+        if self.node.is_online:
+            self.connection_label.setText(
+                f"● Online\n{self.node.host}:{self.node.port}"
+            )
+            self.connection_label.setStyleSheet(
+                "color:#8ff0b5;font-size:12px;"
+            )
+            self.refresh_all()
+
+        if result.get("error"):
+            self.statusBar().showMessage(
+                f"Churn lỗi: {result['error']}", 8000
+            )
+        elif result.get("stopped"):
+            self.statusBar().showMessage("Đã dừng mô phỏng churn", 5000)
+        else:
+            self.statusBar().showMessage(
+                f"Hoàn thành {result.get('completed_cycles', 0)} vòng churn",
+                6000,
+            )
 
     def choose_file(self):
         if not self.active_id:

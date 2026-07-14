@@ -17,6 +17,9 @@ class NodeBridge(QObject):
     file_completed = Signal(dict)
     file_failed = Signal(dict)
     file_rejected = Signal(dict)
+    churn_state = Signal(dict)
+    churn_log = Signal(str)
+    churn_finished = Signal(dict)
 
     def __init__(self, node):
         super().__init__()
@@ -62,4 +65,9 @@ class NodeBridge(QObject):
             completed=self.file_completed.emit,
             failed=self.file_failed.emit,
             rejected=self.file_rejected.emit,
+        )
+        self.node.churn.set_callbacks(
+            state=self.churn_state.emit,
+            log=self.churn_log.emit,
+            finished=self.churn_finished.emit,
         )
