@@ -59,6 +59,12 @@ class MainWindow(QMainWindow):
 
         side.addWidget(QLabel("P2P Chat", objectName="brand"))
         side.addWidget(QLabel("Kết nối trực tiếp • TCP", objectName="mutedOnDark"))
+        crypto_label = QLabel(
+            f"🔒 AES-256-GCM • {self.node.crypto.fingerprint}",
+            objectName="cryptoOnDark",
+        )
+        crypto_label.setToolTip("Key ID phải giống nhau trên tất cả peer")
+        side.addWidget(crypto_label)
         side.addSpacing(22)
 
         self.profile_avatar = QLabel(self.node.username[:1].upper())

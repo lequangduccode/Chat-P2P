@@ -19,6 +19,12 @@ def parse_args():
     parser.add_argument("--port", "-p", type=int, default=DEFAULT_PEER_PORT)
     parser.add_argument("--bootstrap-host", default=BOOTSTRAP_HOST)
     parser.add_argument("--bootstrap-port", type=int, default=BOOTSTRAP_PORT)
+    parser.add_argument(
+        "--encryption-key",
+        default=os.environ.get("P2P_ENCRYPTION_KEY", "p2p-chat-demo-2026"),
+        help=("Khóa dùng chung cho AES-256-GCM. Tất cả peer phải dùng cùng khóa; "
+              "có thể đặt bằng biến môi trường P2P_ENCRYPTION_KEY."),
+    )
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 
@@ -39,18 +45,31 @@ def main():
         port=args.port,
         bootstrap_host=args.bootstrap_host,
         bootstrap_port=args.bootstrap_port,
+        encryption_key=args.encryption_key,
     )
+
+    # Create MainWindow before node.start(). MainWindow installs NodeBridge,
+    # which must already be listening when bootstrap registration triggers
+    # store-and-forward delivery. Otherwise queued messages arrive only at the
+    # backend callback and are printed to the terminal before the GUI exists.
+    window = MainWindow(node)
 
     if not node.start():
         QMessageBox.critical(
-            None,
+            window,
             "Không thể kết nối",
             f"Không thể đăng ký với bootstrap server tại "
             f"{args.bootstrap_host}:{args.bootstrap_port}.",
         )
+        window.close()
         return 1
 
-    window = MainWindow(node)
+    # Synchronize peers/groups learned during registration, then show the UI.
+    window.refresh_all()
+    window.statusBar().showMessage(
+        f"Đã kết nối • Mã hóa AES-256-GCM • Key ID {node.crypto.fingerprint}",
+        8000,
+    )
     window.show()
     return app.exec()
 

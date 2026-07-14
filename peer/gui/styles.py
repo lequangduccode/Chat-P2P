@@ -17,6 +17,7 @@ QLabel#brand {
     font-weight: 800;
 }
 QLabel#mutedOnDark { color: #bfd1ff; }
+QLabel#cryptoOnDark { color: #83f3c2; font-size: 11px; font-weight: 700; padding-top: 2px; }
 QLabel#sectionTitle {
     color: #718096;
     font-size: 11px;
@@ -298,4 +299,69 @@ QToolTip {
     border-radius: 6px;
     padding: 6px 8px;
 }
+
+/* Conversation rows */
+QWidget#conversationRow {
+    background: transparent;
+    border: none;
+    min-height: 64px;
+    max-height: 64px;
+}
+QWidget#conversationStatus,
+QWidget#unreadBadgeSlot {
+    background: transparent;
+    border: none;
+}
+QLabel#unreadBadgePlaceholder {
+    background: transparent;
+    border: none;
+}
+QLabel#conversationAvatar {
+    background: #dce9ff;
+    color: #2259b8;
+    border: none;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 800;
+}
+QLabel#conversationName {
+    background: transparent;
+    color: #101828;
+    border: none;
+    font-size: 14px;
+    font-weight: 700;
+    padding: 0;
+    margin: 0;
+}
+QLabel#conversationSubtitle {
+    background: transparent;
+    color: #667085;
+    border: none;
+    font-size: 12px;
+    padding: 0;
+    margin: 0;
+}
+QLabel#onlineDot {
+    background: transparent;
+    color: #22b573;
+    border: none;
+    font-size: 9px;
+    padding: 0;
+    margin: 0;
+}
+QLabel#offlineDot {
+    background: transparent;
+    color: #98a2b3;
+    border: none;
+    font-size: 10px;
+}
+QLabel#unreadBadge {
+    background: #f04438;
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
 """

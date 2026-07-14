@@ -44,7 +44,7 @@ def add_members_to_group(node, group_name: str, usernames: list[str]) -> str | N
         if not peer.online or not node.client.send_to_peer(peer.host, peer.port, invite):
             # Preserve the membership update for reconnecting peers when possible.
             try:
-                node.client.store_offline(member_id, invite)
+                node.client.store_offline(peer.username, invite)
             except Exception:
                 pass
             failed.append(peer.username)
