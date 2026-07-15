@@ -1,8 +1,9 @@
-"""Encrypted direct file transfer over a dedicated TCP connection.
+"""Encrypted on-demand file sharing for direct and group conversations.
 
-Control messages (offer/accept/reject) use the normal P2P message channel.
-File bytes use a temporary direct TCP listener so large files do not block chat.
-Every chunk is independently protected with AES-256-GCM.
+A FILE_SHARE control message publishes metadata into a conversation.
+No file bytes are transferred at that point. A recipient explicitly clicks
+Download, opens a temporary TCP listener, and sends FILE_DOWNLOAD_REQUEST to
+the original sender. The sender then streams encrypted chunks directly.
 """
 from __future__ import annotations
 
@@ -20,28 +21,40 @@ from common.protocol import encode_msg, make_msg, new_id, now_str, recv_msg
 
 log = logging.getLogger(__name__)
 
-FILE_OFFER = "FILE_OFFER"
-FILE_ACCEPT = "FILE_ACCEPT"
-FILE_REJECT = "FILE_REJECT"
+FILE_SHARE = "FILE_SHARE"
+FILE_DOWNLOAD_REQUEST = "FILE_DOWNLOAD_REQUEST"
 FILE_CANCEL = "FILE_CANCEL"
 FILE_STREAM_BEGIN = "FILE_STREAM_BEGIN"
 FILE_STREAM_RESULT = "FILE_STREAM_RESULT"
 
 CHUNK_SIZE = 256 * 1024
 MAX_FILE_SIZE = 100 * 1024 * 1024
-TRANSFER_TIMEOUT = 45
+TRANSFER_TIMEOUT = 60
 
 
 @dataclass
-class TransferSession:
-    transfer_id: str
+class SharedFile:
+    share_id: str
+    filename: str
+    total_size: int
+    local_path: str
+    sha256: str
+    conversation_type: str
+    target_name: str
+    group_id: str = ""
+
+
+@dataclass
+class DownloadSession:
+    request_id: str
+    share_id: str
     peer_name: str
     filename: str
     total_size: int
-    direction: str
-    local_path: str = ""
+    local_path: str
+    direction: str = "incoming"
     sha256: str = ""
-    status: str = "preparing"
+    status: str = "available"
     transferred: int = 0
     cancel_event: threading.Event = field(default_factory=threading.Event)
     active_socket: socket.socket | None = None
@@ -80,8 +93,9 @@ def recv_exact(sock: socket.socket, size: int) -> bytes | None:
 class FileTransferManager:
     def __init__(self, node):
         self.node = node
-        self.sessions: dict[str, TransferSession] = {}
-        self.incoming_offers: dict[str, dict] = {}
+        self.shared_files: dict[str, SharedFile] = {}
+        self.incoming_shares: dict[str, dict] = {}
+        self.sessions: dict[str, DownloadSession] = {}
         self._lock = threading.RLock()
 
         self.on_offer: Callable[[dict], None] | None = None
@@ -91,13 +105,7 @@ class FileTransferManager:
         self.on_rejected: Callable[[dict], None] | None = None
 
     def set_callbacks(
-        self,
-        *,
-        offer=None,
-        progress=None,
-        completed=None,
-        failed=None,
-        rejected=None,
+        self, *, offer=None, progress=None, completed=None, failed=None, rejected=None
     ):
         self.on_offer = offer
         self.on_progress = progress
@@ -109,9 +117,10 @@ class FileTransferManager:
         if callback:
             callback(dict(payload))
 
-    def _session_payload(self, session: TransferSession, **extra) -> dict:
+    def _session_payload(self, session: DownloadSession, **extra) -> dict:
         payload = {
-            "transfer_id": session.transfer_id,
+            "transfer_id": session.share_id,
+            "request_id": session.request_id,
             "peer_name": session.peer_name,
             "filename": session.filename,
             "total_size": session.total_size,
@@ -124,221 +133,208 @@ class FileTransferManager:
         return payload
 
     # ------------------------------------------------------------------
-    # Sender side
+    # Publish file metadata
     # ------------------------------------------------------------------
-    def offer_file(self, to_username: str, file_path: str) -> tuple[str | None, str | None]:
+    def share_direct(self, to_username: str, file_path: str):
+        return self._share(file_path, "direct", to_username)
+
+    def share_group(self, group_name: str, file_path: str):
+        return self._share(file_path, "group", group_name)
+
+    def _share(self, file_path: str, conversation_type: str, target_name: str):
         path = Path(file_path)
         if not path.is_file():
             return None, "File không tồn tại hoặc không thể đọc."
         size = path.stat().st_size
         if size <= 0:
-            return None, "Không thể gửi file rỗng."
+            return None, "Không thể chia sẻ file rỗng."
         if size > MAX_FILE_SIZE:
             return None, f"File vượt giới hạn {human_size(MAX_FILE_SIZE)}."
-        peer = self.node.manager.get_peer_by_name(to_username)
-        if not peer:
-            return None, f"Không tìm thấy peer '{to_username}'."
-        if not peer.online:
-            return None, "File transfer chỉ hỗ trợ peer đang online."
 
-        transfer_id = new_id()
-        session = TransferSession(
-            transfer_id=transfer_id,
-            peer_name=to_username,
+        if conversation_type == "direct":
+            peer = self.node.manager.get_peer_by_name(target_name)
+            if not peer:
+                return None, f"Không tìm thấy peer '{target_name}'."
+            recipients = [peer]
+            group_id = ""
+        else:
+            group = self.node.manager.get_group_by_name(target_name)
+            if not group:
+                return None, f"Không tìm thấy nhóm '{target_name}'."
+            group_id = group.group_id
+            recipients = []
+            for member_id in group.members:
+                if member_id == self.node.peer_id:
+                    continue
+                peer = self.node.manager.get_peer(member_id)
+                if peer:
+                    recipients.append(peer)
+
+        share_id = new_id()
+        shared = SharedFile(
+            share_id=share_id,
             filename=path.name,
             total_size=size,
-            direction="outgoing",
             local_path=str(path),
+            sha256="",
+            conversation_type=conversation_type,
+            target_name=target_name,
+            group_id=group_id,
         )
         with self._lock:
-            self.sessions[transfer_id] = session
+            self.shared_files[share_id] = shared
 
         threading.Thread(
-            target=self._prepare_and_send_offer,
-            args=(session,),
+            target=self._prepare_share,
+            args=(shared, recipients),
             daemon=True,
-            name=f"file-offer-{transfer_id[:8]}",
+            name=f"file-share-{share_id[:8]}",
         ).start()
-        return transfer_id, None
+        return share_id, None
 
-    def _prepare_and_send_offer(self, session: TransferSession):
+    def _prepare_share(self, shared: SharedFile, recipients: list):
         try:
-            session.status = "preparing"
-            self._emit(self.on_progress, self._session_payload(session))
-            session.sha256 = sha256_file(Path(session.local_path))
-            if session.cancel_event.is_set():
-                raise RuntimeError("Đã hủy truyền file")
-
-            peer = self.node.manager.get_peer_by_name(session.peer_name)
-            if not peer or not peer.online:
-                raise ConnectionError("Peer đã offline trước khi nhận đề nghị")
-
-            offer = make_msg(
-                FILE_OFFER,
-                transfer_id=session.transfer_id,
+            self._emit(self.on_progress, {
+                "transfer_id": shared.share_id,
+                "filename": shared.filename,
+                "total_size": shared.total_size,
+                "transferred": 0,
+                "direction": "outgoing",
+                "status": "preparing",
+                "local_path": shared.local_path,
+            })
+            shared.sha256 = sha256_file(Path(shared.local_path))
+            message = make_msg(
+                FILE_SHARE,
+                share_id=shared.share_id,
+                transfer_id=shared.share_id,
                 from_id=self.node.peer_id,
                 from_name=self.node.username,
-                to_id=peer.peer_id,
-                filename=session.filename,
-                size=session.total_size,
-                sha256=session.sha256,
+                filename=shared.filename,
+                size=shared.total_size,
+                sha256=shared.sha256,
+                conversation_type=shared.conversation_type,
+                target_name=shared.target_name,
+                group_id=shared.group_id,
+                group_name=shared.target_name if shared.conversation_type == "group" else "",
                 encrypted=True,
                 encryption="AES-256-GCM",
                 timestamp=now_str(),
             )
-            if not self.node.client.send_to_peer(peer.host, peer.port, offer):
-                raise ConnectionError("Không gửi được đề nghị truyền file")
 
-            session.status = "waiting"
-            self._emit(self.on_progress, self._session_payload(session))
+            queued = []
+            failed = []
+            for peer in recipients:
+                if not peer.online:
+                    self.node.client.store_offline(peer.username, message)
+                    queued.append(peer.username)
+                elif not self.node.client.send_to_peer(peer.host, peer.port, message):
+                    self.node.client.store_offline(peer.username, message)
+                    queued.append(peer.username)
+
+            self._emit(self.on_completed, {
+                "transfer_id": shared.share_id,
+                "filename": shared.filename,
+                "total_size": shared.total_size,
+                "transferred": 0,
+                "direction": "outgoing",
+                "status": "shared",
+                "local_path": shared.local_path,
+                "queued_for": queued,
+                "failed_for": failed,
+            })
         except Exception as exc:
-            self._fail(session, str(exc))
+            with self._lock:
+                self.shared_files.pop(shared.share_id, None)
+            self._emit(self.on_failed, {
+                "transfer_id": shared.share_id,
+                "filename": shared.filename,
+                "total_size": shared.total_size,
+                "direction": "outgoing",
+                "status": "failed",
+                "local_path": shared.local_path,
+                "error": str(exc),
+            })
 
-    def handle_accept(self, msg: dict):
-        transfer_id = msg.get("transfer_id", "")
-        with self._lock:
-            session = self.sessions.get(transfer_id)
-        if not session or session.direction != "outgoing":
-            return
-        host = msg.get("host")
-        port = int(msg.get("port", 0))
-        threading.Thread(
-            target=self._send_stream,
-            args=(session, host, port),
-            daemon=True,
-            name=f"file-send-{transfer_id[:8]}",
-        ).start()
-
-    def _send_stream(self, session: TransferSession, host: str, port: int):
-        sock = None
-        try:
-            session.status = "connecting"
-            self._emit(self.on_progress, self._session_payload(session))
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(TRANSFER_TIMEOUT)
-            sock.connect((host, port))
-            session.active_socket = sock
-
-            begin = make_msg(
-                FILE_STREAM_BEGIN,
-                transfer_id=session.transfer_id,
-                filename=session.filename,
-                size=session.total_size,
-                sha256=session.sha256,
-                chunk_size=CHUNK_SIZE,
-            )
-            sock.sendall(encode_msg(begin))
-
-            session.status = "transferring"
-            chunk_index = 0
-            with Path(session.local_path).open("rb") as handle:
-                while True:
-                    if session.cancel_event.is_set():
-                        raise RuntimeError("Đã hủy truyền file")
-                    chunk = handle.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    aad = f"{session.transfer_id}:{chunk_index}".encode("utf-8")
-                    packet = self.node.crypto.encrypt_bytes(chunk, aad)
-                    sock.sendall(struct.pack(">I", len(packet)))
-                    sock.sendall(packet)
-                    session.transferred += len(chunk)
-                    self._emit(self.on_progress, self._session_payload(session))
-                    chunk_index += 1
-
-            sock.sendall(struct.pack(">I", 0))
-            result = recv_msg(sock)
-            if not result or result.get("type") != FILE_STREAM_RESULT:
-                raise ConnectionError("Không nhận được xác nhận hoàn tất")
-            if not result.get("ok"):
-                raise IOError(result.get("error", "Peer nhận báo lỗi"))
-            session.status = "completed"
-            self._emit(self.on_completed, self._session_payload(session))
-        except Exception as exc:
-            self._fail(session, str(exc))
-        finally:
-            session.active_socket = None
-            if sock:
-                try:
-                    sock.close()
-                except OSError:
-                    pass
-
-    # ------------------------------------------------------------------
-    # Receiver side
-    # ------------------------------------------------------------------
-    def handle_offer(self, msg: dict):
-        transfer_id = msg.get("transfer_id", "")
+    def handle_share(self, msg: dict):
+        share_id = msg.get("share_id") or msg.get("transfer_id", "")
         try:
             size = int(msg.get("size", 0))
         except (TypeError, ValueError):
             size = 0
-        if not transfer_id or not msg.get("filename") or size <= 0 or size > MAX_FILE_SIZE:
+        if not share_id or not msg.get("filename") or size <= 0 or size > MAX_FILE_SIZE:
             return
+        msg = dict(msg)
+        msg["share_id"] = share_id
+        msg["transfer_id"] = share_id
         with self._lock:
-            self.incoming_offers[transfer_id] = dict(msg)
+            self.incoming_shares[share_id] = msg
         self._emit(self.on_offer, msg)
 
-    def accept_offer(self, transfer_id: str, save_path: str) -> str | None:
+    # ------------------------------------------------------------------
+    # Recipient explicitly requests a download
+    # ------------------------------------------------------------------
+    def download(self, share_id: str, save_path: str) -> str | None:
         with self._lock:
-            offer = self.incoming_offers.get(transfer_id)
+            offer = self.incoming_shares.get(share_id)
         if not offer:
-            return "Đề nghị truyền file không còn tồn tại."
+            return "Thông tin file không còn tồn tại."
+        sender = offer.get("from_name", "")
+        peer = self.node.manager.get_peer_by_name(sender)
+        if not peer or not peer.online:
+            return "Người gửi đang offline. Hãy thử tải lại khi họ online."
 
-        destination = Path(save_path)
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            return f"Không thể tạo thư mục lưu file: {exc}"
-
-        session = TransferSession(
-            transfer_id=transfer_id,
-            peer_name=offer.get("from_name", "Unknown"),
+        request_id = new_id()
+        session = DownloadSession(
+            request_id=request_id,
+            share_id=share_id,
+            peer_name=sender,
             filename=offer["filename"],
             total_size=int(offer["size"]),
-            direction="incoming",
-            local_path=str(destination),
+            local_path=save_path,
             sha256=offer.get("sha256", ""),
-            status="waiting",
+            status="connecting",
         )
         with self._lock:
-            self.sessions[transfer_id] = session
+            self.sessions[request_id] = session
 
         threading.Thread(
-            target=self._receive_stream,
-            args=(session, offer),
+            target=self._receive_download,
+            args=(session, peer),
             daemon=True,
-            name=f"file-recv-{transfer_id[:8]}",
+            name=f"file-download-{request_id[:8]}",
         ).start()
         return None
 
-    def _receive_stream(self, session: TransferSession, offer: dict):
+    def _receive_download(self, session: DownloadSession, sender_peer):
         listener = None
         conn = None
         temp_path = Path(session.local_path + ".part")
         try:
+            destination = Path(session.local_path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind((self.node.host, 0))
             listener.listen(1)
             listener.settimeout(TRANSFER_TIMEOUT)
-            transfer_port = listener.getsockname()[1]
+            port = listener.getsockname()[1]
 
-            peer = self.node.manager.get_peer_by_name(session.peer_name)
-            if not peer or not peer.online:
-                raise ConnectionError("Peer gửi đã offline")
-
-            accept_msg = make_msg(
-                FILE_ACCEPT,
-                transfer_id=session.transfer_id,
+            request = make_msg(
+                FILE_DOWNLOAD_REQUEST,
+                share_id=session.share_id,
+                transfer_id=session.share_id,
+                request_id=session.request_id,
                 from_id=self.node.peer_id,
                 from_name=self.node.username,
-                to_id=peer.peer_id,
                 host=self.node.host,
-                port=transfer_port,
+                port=port,
             )
-            if not self.node.client.send_to_peer(peer.host, peer.port, accept_msg):
-                raise ConnectionError("Không gửi được phản hồi chấp nhận")
+            if not self.node.client.send_to_peer(
+                sender_peer.host, sender_peer.port, request
+            ):
+                raise ConnectionError("Không gửi được yêu cầu tải tới người chia sẻ")
 
             session.status = "waiting"
             self._emit(self.on_progress, self._session_payload(session))
@@ -350,7 +346,8 @@ class FileTransferManager:
             if (
                 not begin
                 or begin.get("type") != FILE_STREAM_BEGIN
-                or begin.get("transfer_id") != session.transfer_id
+                or begin.get("request_id") != session.request_id
+                or begin.get("share_id") != session.share_id
             ):
                 raise ValueError("Header truyền file không hợp lệ")
 
@@ -361,7 +358,7 @@ class FileTransferManager:
             with temp_path.open("wb") as output:
                 while True:
                     if session.cancel_event.is_set():
-                        raise RuntimeError("Đã hủy nhận file")
+                        raise RuntimeError("Đã hủy tải file")
                     raw_length = recv_exact(conn, 4)
                     if raw_length is None:
                         raise ConnectionError("Kết nối bị đóng giữa chừng")
@@ -369,11 +366,13 @@ class FileTransferManager:
                     if packet_length == 0:
                         break
                     if packet_length > CHUNK_SIZE + 128:
-                        raise ValueError("Chunk file vượt kích thước cho phép")
+                        raise ValueError("Chunk vượt kích thước cho phép")
                     packet = recv_exact(conn, packet_length)
                     if packet is None:
                         raise ConnectionError("Không nhận đủ dữ liệu chunk")
-                    aad = f"{session.transfer_id}:{chunk_index}".encode("utf-8")
+                    aad = (
+                        f"{session.share_id}:{session.request_id}:{chunk_index}"
+                    ).encode("utf-8")
                     plaintext = self.node.crypto.decrypt_bytes(packet, aad)
                     output.write(plaintext)
                     digest.update(plaintext)
@@ -382,11 +381,12 @@ class FileTransferManager:
                     self._emit(self.on_progress, self._session_payload(session))
                     chunk_index += 1
 
-            actual_hash = digest.hexdigest()
             if received != session.total_size:
                 raise IOError(
-                    f"Kích thước không khớp: nhận {received}, dự kiến {session.total_size}"
+                    f"Kích thước không khớp: nhận {received}, "
+                    f"dự kiến {session.total_size}"
                 )
+            actual_hash = digest.hexdigest()
             if session.sha256 and actual_hash != session.sha256:
                 raise IOError("SHA-256 không khớp; file có thể đã bị thay đổi")
 
@@ -395,20 +395,27 @@ class FileTransferManager:
                 final_path = self._unique_path(final_path)
                 session.local_path = str(final_path)
             os.replace(temp_path, final_path)
+
             conn.sendall(encode_msg(make_msg(FILE_STREAM_RESULT, ok=True)))
             session.status = "completed"
             self._emit(self.on_completed, self._session_payload(session))
         except Exception as exc:
             try:
                 if conn:
-                    conn.sendall(encode_msg(make_msg(FILE_STREAM_RESULT, ok=False, error=str(exc))))
+                    conn.sendall(
+                        encode_msg(make_msg(FILE_STREAM_RESULT, ok=False, error=str(exc)))
+                    )
             except Exception:
                 pass
             try:
                 temp_path.unlink(missing_ok=True)
             except OSError:
                 pass
-            self._fail(session, str(exc))
+            session.status = "cancelled" if session.cancel_event.is_set() else "failed"
+            self._emit(
+                self.on_failed,
+                self._session_payload(session, error=str(exc)),
+            )
         finally:
             session.active_socket = None
             for sock in (conn, listener):
@@ -417,88 +424,100 @@ class FileTransferManager:
                         sock.close()
                     except OSError:
                         pass
-            with self._lock:
-                self.incoming_offers.pop(session.transfer_id, None)
-
-    def reject_offer(self, transfer_id: str, reason: str = "Người nhận từ chối"):
-        with self._lock:
-            offer = self.incoming_offers.pop(transfer_id, None)
-        if not offer:
-            return
-        peer = self.node.manager.get_peer_by_name(offer.get("from_name", ""))
-        if peer and peer.online:
-            self.node.client.send_to_peer(
-                peer.host,
-                peer.port,
-                make_msg(
-                    FILE_REJECT,
-                    transfer_id=transfer_id,
-                    from_name=self.node.username,
-                    reason=reason,
-                ),
-            )
-
-    def handle_reject(self, msg: dict):
-        transfer_id = msg.get("transfer_id", "")
-        with self._lock:
-            session = self.sessions.get(transfer_id)
-        if not session:
-            return
-        session.status = "rejected"
-        payload = self._session_payload(
-            session, reason=msg.get("reason", "Người nhận từ chối")
-        )
-        self._emit(self.on_rejected, payload)
 
     # ------------------------------------------------------------------
-    # Cancellation and errors
+    # Original sender serves any number of independent download requests
     # ------------------------------------------------------------------
-    def cancel(self, transfer_id: str):
+    def handle_download_request(self, msg: dict):
+        share_id = msg.get("share_id") or msg.get("transfer_id", "")
+        request_id = msg.get("request_id", "")
         with self._lock:
-            session = self.sessions.get(transfer_id)
-        if not session:
+            shared = self.shared_files.get(share_id)
+        if not shared or not request_id:
             return
-        session.cancel_event.set()
-        session.status = "cancelled"
-        if session.active_socket:
-            try:
-                session.active_socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            try:
-                session.active_socket.close()
-            except OSError:
-                pass
-        peer = self.node.manager.get_peer_by_name(session.peer_name)
-        if peer and peer.online:
-            self.node.client.send_to_peer(
-                peer.host,
-                peer.port,
-                make_msg(
-                    FILE_CANCEL,
-                    transfer_id=transfer_id,
-                    from_name=self.node.username,
-                ),
-                retries=1,
-            )
-        self._emit(self.on_failed, self._session_payload(session, error="Đã hủy truyền file"))
+        threading.Thread(
+            target=self._serve_download,
+            args=(shared, msg),
+            daemon=True,
+            name=f"file-serve-{request_id[:8]}",
+        ).start()
 
-    def handle_cancel(self, msg: dict):
-        transfer_id = msg.get("transfer_id", "")
+    def _serve_download(self, shared: SharedFile, request: dict):
+        sock = None
+        try:
+            path = Path(shared.local_path)
+            if not path.is_file():
+                raise FileNotFoundError(
+                    "File gốc đã bị di chuyển hoặc xóa khỏi máy người gửi"
+                )
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(TRANSFER_TIMEOUT)
+            sock.connect((request["host"], int(request["port"])))
+
+            request_id = request["request_id"]
+            sock.sendall(encode_msg(make_msg(
+                FILE_STREAM_BEGIN,
+                share_id=shared.share_id,
+                request_id=request_id,
+                filename=shared.filename,
+                size=shared.total_size,
+                sha256=shared.sha256,
+                chunk_size=CHUNK_SIZE,
+            )))
+
+            chunk_index = 0
+            with path.open("rb") as handle:
+                while True:
+                    chunk = handle.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    aad = (
+                        f"{shared.share_id}:{request_id}:{chunk_index}"
+                    ).encode("utf-8")
+                    packet = self.node.crypto.encrypt_bytes(chunk, aad)
+                    sock.sendall(struct.pack(">I", len(packet)))
+                    sock.sendall(packet)
+                    chunk_index += 1
+            sock.sendall(struct.pack(">I", 0))
+            result = recv_msg(sock)
+            if not result or not result.get("ok"):
+                log.warning(
+                    "Peer %s không hoàn tất tải file %s: %s",
+                    request.get("from_name"),
+                    shared.filename,
+                    (result or {}).get("error", "không có ACK"),
+                )
+        except Exception as exc:
+            log.warning("Không thể phục vụ lượt tải file: %s", exc)
+        finally:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+
+    def cancel(self, request_or_share_id: str):
         with self._lock:
-            session = self.sessions.get(transfer_id)
-        if session:
+            sessions = [
+                session
+                for session in self.sessions.values()
+                if session.request_id == request_or_share_id
+                or session.share_id == request_or_share_id
+            ]
+        for session in sessions:
             session.cancel_event.set()
             if session.active_socket:
+                try:
+                    session.active_socket.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
                 try:
                     session.active_socket.close()
                 except OSError:
                     pass
 
-    def _fail(self, session: TransferSession, error: str):
-        if session.status != "cancelled":
-            session.status = "failed"
-        self._emit(self.on_failed, self._session_payload(session, error=error))
+    def handle_cancel(self, msg: dict):
+        self.cancel(msg.get("request_id") or msg.get("share_id", ""))
 
     @staticmethod
     def _unique_path(path: Path) -> Path:

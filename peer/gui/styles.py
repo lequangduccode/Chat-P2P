@@ -425,7 +425,7 @@ QProgressBar#fileProgress::chunk {
     background: #2f6fed;
     border-radius: 3px;
 }
-QPushButton#fileCancelButton, QPushButton#fileOpenButton {
+QPushButton#fileCancelButton, QPushButton#fileOpenButton, QPushButton#fileDownloadButton {
     min-height: 16px;
     padding: 6px 10px;
     border-radius: 8px;
@@ -484,6 +484,16 @@ QPlainTextEdit#churnLog {
     padding: 10px;
     font-family: "Cascadia Mono", "Consolas";
     font-size: 12px;
+}
+
+
+QPushButton#fileDownloadButton {
+    background: #2f6fed;
+    color: #ffffff;
+    border: none;
+}
+QPushButton#fileDownloadButton:hover {
+    background: #245ed4;
 }
 
 """

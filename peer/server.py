@@ -15,9 +15,8 @@ _ACK_TYPES = {
     MsgType.GROUP_INVITE,
     MsgType.PEER_JOINED,
     MsgType.PEER_LEFT,
-    "FILE_OFFER",
-    "FILE_ACCEPT",
-    "FILE_REJECT",
+    "FILE_SHARE",
+    "FILE_DOWNLOAD_REQUEST",
     "FILE_CANCEL",
 }
 

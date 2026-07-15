@@ -13,7 +13,10 @@ from peer.churn import ChurnController
 from peer.crypto import MessageCrypto, MessageDecryptionError
 from peer.peer_manager import PeerManager
 from peer.file_transfer.manager import (
-    FILE_ACCEPT, FILE_CANCEL, FILE_OFFER, FILE_REJECT, FileTransferManager,
+    FILE_CANCEL,
+    FILE_DOWNLOAD_REQUEST,
+    FILE_SHARE,
+    FileTransferManager,
 )
 from peer.server import PeerServer
 
@@ -182,9 +185,8 @@ class PeerNode:
             MsgType.DIRECT_MSG: self._on_direct_msg,
             MsgType.GROUP_MSG: self._on_group_msg,
             MsgType.GROUP_INVITE: self._on_group_invite,
-            FILE_OFFER: self.file_transfer.handle_offer,
-            FILE_ACCEPT: self.file_transfer.handle_accept,
-            FILE_REJECT: self.file_transfer.handle_reject,
+            FILE_SHARE: self.file_transfer.handle_share,
+            FILE_DOWNLOAD_REQUEST: self.file_transfer.handle_download_request,
             FILE_CANCEL: self.file_transfer.handle_cancel,
         }
         handler = handlers.get(msg.get("type"))
@@ -336,17 +338,20 @@ class PeerNode:
         return self.manager.all_groups()
 
 
-    def send_file(self, to_username: str, file_path: str) -> tuple[str | None, str | None]:
-        """Start an encrypted direct file-transfer offer."""
+    def send_file(
+        self, target_name: str, file_path: str, conversation_type: str = "direct"
+    ) -> tuple[str | None, str | None]:
+        """Publish a file card; file bytes are transferred only on Download."""
         if not self._online:
             return None, "Peer hiện offline do mô phỏng churn."
-        return self.file_transfer.offer_file(to_username, file_path)
+        if conversation_type == "group":
+            return self.file_transfer.share_group(target_name, file_path)
+        return self.file_transfer.share_direct(target_name, file_path)
 
-    def accept_file(self, transfer_id: str, save_path: str) -> str | None:
-        return self.file_transfer.accept_offer(transfer_id, save_path)
-
-    def reject_file(self, transfer_id: str, reason: str = "Người nhận từ chối"):
-        self.file_transfer.reject_offer(transfer_id, reason)
+    def download_file(self, share_id: str, save_path: str) -> str | None:
+        if not self._online:
+            return "Peer hiện offline do mô phỏng churn."
+        return self.file_transfer.download(share_id, save_path)
 
     def cancel_file(self, transfer_id: str):
         self.file_transfer.cancel(transfer_id)
