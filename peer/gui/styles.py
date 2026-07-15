@@ -468,14 +468,6 @@ QCheckBox#churnJitterCheck::indicator:checked {
     border: 1px solid #2f6fed;
     border-radius: 5px;
 }
-QSpinBox {
-    background: #ffffff;
-    border: 1px solid #d6dfeb;
-    border-radius: 9px;
-    padding: 7px 10px;
-    min-width: 120px;
-}
-QSpinBox:focus { border: 1px solid #2f6fed; }
 QPlainTextEdit#churnLog {
     background: #101828;
     color: #d7e4ff;
@@ -494,6 +486,92 @@ QPushButton#fileDownloadButton {
 }
 QPushButton#fileDownloadButton:hover {
     background: #245ed4;
+}
+
+
+QDialog#launchDialog {
+    background: #f4f7fb;
+}
+QLabel#launchTitle {
+    color: #101828;
+    font-size: 25px;
+    font-weight: 800;
+}
+QLabel#launchSubtitle {
+    color: #667085;
+    font-size: 13px;
+}
+QFrame#launchCard {
+    background: #ffffff;
+    border: 1px solid #dfe7f1;
+    border-radius: 16px;
+}
+QLabel#launchNotice {
+    background: #eaf1ff;
+    color: #315baf;
+    border: 1px solid #d6e3fb;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12px;
+}
+QCheckBox#showKeyCheck {
+    spacing: 8px;
+    color: #667085;
+    min-height: 24px;
+}
+
+QListWidget#peerList,
+QListWidget#groupList,
+QListWidget#conversationList {
+    border: none;
+}
+QListWidget#peerList QScrollBar:horizontal,
+QListWidget#groupList QScrollBar:horizontal,
+QListWidget#conversationList QScrollBar:horizontal {
+    height: 0px;
+    background: transparent;
+}
+QScrollBar:horizontal {
+    height: 0px;
+    background: transparent;
+}
+
+
+QWidget#customCheckBoxRow {
+    background: transparent;
+}
+QPushButton#customCheckBox {
+    min-width: 25px;
+    max-width: 25px;
+    min-height: 25px;
+    max-height: 25px;
+    padding: 0;
+    margin: 0;
+    background: #ffffff;
+    border: 1px solid #b8c5d6;
+    border-radius: 7px;
+    color: transparent;
+    font-size: 17px;
+    font-weight: 900;
+}
+QPushButton#customCheckBox:hover {
+    border: 1px solid #2f6fed;
+    background: #f7faff;
+}
+QPushButton#customCheckBox:checked {
+    background: #3b73ed;
+    border: 1px solid #3b73ed;
+    color: #ffffff;
+}
+QPushButton#customCheckBox:checked:hover {
+    background: #2f64da;
+    border: 1px solid #2f64da;
+}
+QLabel#customCheckBoxLabel {
+    background: transparent;
+    border: none;
+    color: #667085;
+    font-size: 14px;
 }
 
 """
