@@ -456,18 +456,6 @@ QLabel#churnStatusTitle {
     font-weight: 750;
 }
 QLabel#churnStatusDetail { color: #667085; font-size: 12px; }
-QCheckBox#churnJitterCheck { spacing: 8px; color: #344054; }
-QCheckBox#churnJitterCheck::indicator { width: 18px; height: 18px; }
-QCheckBox#churnJitterCheck::indicator:unchecked {
-    background: #ffffff;
-    border: 1px solid #b8c5d6;
-    border-radius: 5px;
-}
-QCheckBox#churnJitterCheck::indicator:checked {
-    background: #2f6fed;
-    border: 1px solid #2f6fed;
-    border-radius: 5px;
-}
 QPlainTextEdit#churnLog {
     background: #101828;
     color: #d7e4ff;
@@ -572,6 +560,89 @@ QLabel#customCheckBoxLabel {
     border: none;
     color: #667085;
     font-size: 14px;
+}
+
+
+QDialog#churnDialog QSpinBox {
+    background: #ffffff;
+    color: #172033;
+    border: 1px solid #d6dfeb;
+    border-radius: 9px;
+    padding: 7px 34px 7px 10px;
+    min-height: 24px;
+    selection-background-color: #2f6fed;
+    selection-color: #ffffff;
+}
+QDialog#churnDialog QSpinBox:hover {
+    border-color: #b8c5d6;
+}
+QDialog#churnDialog QSpinBox:focus {
+    background: #ffffff;
+    color: #172033;
+    border: 1px solid #2f6fed;
+}
+QDialog#churnDialog QSpinBox:disabled {
+    background: #eef2f7;
+    color: #98a2b3;
+    border: 1px solid #dfe5ee;
+}
+QDialog#churnDialog QSpinBox::up-button,
+QDialog#churnDialog QSpinBox::down-button {
+    width: 22px;
+    background: #f4f7fb;
+    border-left: 1px solid #d6dfeb;
+}
+QDialog#churnDialog QSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    border-top-right-radius: 8px;
+    border-bottom: 1px solid #d6dfeb;
+}
+QDialog#churnDialog QSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 8px;
+}
+QDialog#churnDialog QSpinBox::up-button:hover,
+QDialog#churnDialog QSpinBox::down-button:hover {
+    background: #e8eef7;
+}
+QDialog#churnDialog QSpinBox::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 6px solid #667085;
+}
+QDialog#churnDialog QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 6px solid #667085;
+}
+
+/* Churn checkbox: white when off, blue with a visible white check when on. */
+QDialog#churnDialog QCheckBox#churnJitterCheck {
+    spacing: 9px;
+    color: #344054;
+    min-height: 25px;
+}
+QDialog#churnDialog QCheckBox#churnJitterCheck::indicator {
+    width: 21px;
+    height: 21px;
+}
+QDialog#churnDialog QCheckBox#churnJitterCheck::indicator:unchecked {
+    background: #ffffff;
+    border: 1px solid #b8c5d6;
+    border-radius: 6px;
+}
+QDialog#churnDialog QCheckBox#churnJitterCheck::indicator:checked {
+    background: #3b73ed;
+    border: 1px solid #3b73ed;
+    border-radius: 6px;
 }
 
 """

@@ -1,30 +1,93 @@
 # Chat P2P – Ứng dụng nhắn tin ngang hàng bằng Python
 
-Ứng dụng chat ngang hàng (Peer-to-Peer) được xây dựng cho đồ án môn **Các hệ thống phân tán**. Bootstrap Server chỉ thực hiện đăng ký, khám phá và theo dõi trạng thái peer; nội dung chat và file được truyền trực tiếp giữa các peer qua TCP.
+Hệ thống sử dụng một Bootstrap Server để đăng ký, khám phá và theo dõi trạng thái các peer; nội dung chat và dữ liệu file được truyền trực tiếp giữa các peer qua TCP.
 
-Phiên bản hiện tại cung cấp giao diện **PySide6**, nhắn tin riêng, chat nhóm, lưu tin nhắn khi người nhận offline, mã hóa **AES-256-GCM** và truyền file trực tiếp có mã hóa.
+Phiên bản hiện tại có giao diện desktop bằng **PySide6**, nhắn tin riêng, chat nhóm, broadcast, lưu tin nhắn khi peer offline, mã hóa **AES-256-GCM**, chia sẻ file theo yêu cầu tải và mô phỏng churn.
 
 ## Tính năng chính
 
-- Đăng ký peer và khám phá người dùng đang trực tuyến.
+- Đăng ký peer với Bootstrap Server và khám phá các peer đang hoạt động.
 - Hiển thị trạng thái online/offline theo thời gian thực.
 - Nhắn tin trực tiếp giữa hai peer.
+- Gửi thông báo broadcast tới các peer đang ơnline.
 - Tạo nhóm và gửi tin nhắn nhóm.
-- Store-and-forward: lưu tin nhắn khi người nhận offline và chuyển tiếp khi họ kết nối lại.
+- Store-and-forward: lưu tin nhắn điều khiển khi người nhận offline và chuyển tiếp khi họ online lại.
 - Mã hóa nội dung tin nhắn bằng AES-256-GCM.
-- Truyền file trực tiếp giữa hai peer, giới hạn 100 MB/file.
-- Mã hóa từng khối dữ liệu file và kiểm tra SHA-256 sau khi nhận.
-- Giao diện desktop bằng PySide6 và giao diện dòng lệnh CLI.
-- Heartbeat, timeout và xử lý peer ngắt kết nối.
+- Chia sẻ file trong hội thoại riêng và hội thoại nhóm.
+- Người nhận chủ động bấm **Tải xuống**; file không tự động tải về máy.
+- Truyền dữ liệu file trực tiếp từ peer sở hữu file tới peer tải file.
+- Mã hóa từng chunk file và kiểm tra SHA-256 sau khi tải xong.
+- Mô phỏng churn bằng cách cho peer luân phiên rời mạng và tham gia lại.
+- Giao diện nhập thông tin kết nối trước khi mở cửa sổ chat.
+- Hỗ trợ cả giao diện GUI và CLI.
+
+## Những thay đổi nổi bật trong phiên bản mới
+
+### 1. Giao diện khởi động
+
+Khi chạy `run_peer_gui.py`, ứng dụng mở một cửa sổ để nhập:
+
+- Tên người dùng.
+- Cổng lắng nghe của peer.
+- Địa chỉ Bootstrap Server.
+- Cổng Bootstrap Server.
+- Khóa mã hóa dùng chung.
+
+Ứng dụng kiểm tra dữ liệu đầu vào trước khi tạo peer. Tên người dùng chỉ nên gồm chữ, số, dấu gạch dưới hoặc dấu gạch ngang; cổng peer phải nằm trong khoảng `1024–65535`.
+
+Có thể bỏ qua cửa sổ này bằng tùy chọn `--no-launcher` khi đã truyền đủ tham số dòng lệnh.
+
+### 2. Chia sẻ file theo yêu cầu tải
+
+Luồng truyền file đã được thay đổi:
+
+1. Người gửi chọn file trong hội thoại.
+2. Ứng dụng tính SHA-256 và gửi metadata của file vào cuộc trò chuyện.
+3. File xuất hiện dưới dạng thẻ chia sẻ.
+4. Dữ liệu file chưa được truyền ở bước này.
+5. Người nhận bấm **Tải xuống** khi muốn lưu file.
+6. Người nhận chọn vị trí lưu.
+7. Ứng dụng thiết lập kết nối TCP trực tiếp và truyền file đã mã hóa.
+
+Không còn hộp thoại bắt buộc người nhận phải xác nhận và tải file ngay khi nhận thông báo.
+
+### 3. Gửi file trong nhóm
+
+File có thể được chia sẻ trong cả:
+
+- Hội thoại trực tiếp.
+- Hội thoại nhóm.
+
+Khi chia sẻ trong nhóm, mỗi thành viên nhận cùng metadata file và có thể tải độc lập vào thời điểm phù hợp. Mỗi lượt tải tạo một phiên truyền riêng giữa thành viên đó và peer đã chia sẻ file.
+
+### 4. Mô phỏng churn
+
+Ứng dụng có hộp thoại **Mô phỏng churn** với các tham số:
+
+- Thời gian online.
+- Thời gian offline.
+- Số vòng lặp.
+- Jitter ngẫu nhiên.
+
+Trong mỗi vòng, peer thực hiện quy trình:
+
+```text
+Online → UNREGISTER → đóng TCP server → Offline
+       → mở lại TCP server → REGISTER → Online
+```
+
+Peer vẫn giữ cửa sổ ứng dụng trong khi offline. Khi kết nối lại, peer tiếp tục đồng bộ danh sách thành viên và nhận dữ liệu đang chờ.
 
 ## Kiến trúc hệ thống
 
 ```text
 ┌───────────────────────────────────────────────────────────────┐
 │                      BOOTSTRAP SERVER                         │
-│  • Đăng ký và quản lý danh sách peer                         │
+│  • Đăng ký và hủy đăng ký peer                               │
+│  • Cung cấp danh sách peer                                   │
 │  • Heartbeat và phát hiện peer mất kết nối                   │
 │  • Phát sự kiện PEER_JOINED / PEER_LEFT                      │
+│  • Lưu thông điệp chờ cho peer offline                       │
 └──────────────────────────┬────────────────────────────────────┘
                            │ TCP
              ┌─────────────┼─────────────┐
@@ -33,16 +96,16 @@ Phiên bản hiện tại cung cấp giao diện **PySide6**, nhắn tin riêng,
         │ Alice   │◄─►│ Bob     │◄─►│ Charlie │
         │ :9001   │   │ :9002   │   │ :9003   │
         └─────────┘   └─────────┘   └─────────┘
-             Chat và file truyền trực tiếp giữa các peer
+             Chat và dữ liệu file truyền giữa các peer
 ```
 
-Bootstrap Server không giải mã nội dung chat hoặc nội dung file. Tuy nhiên, các metadata cần thiết cho việc định tuyến như loại thông điệp, tên người gửi, mã peer, mã nhóm và thời gian vẫn tồn tại ở dạng rõ.
+Bootstrap Server không truyền thay dữ liệu file và không giải mã nội dung chat. Server chủ yếu giữ vai trò tracker, quản lý trạng thái và hỗ trợ store-and-forward cho các thông điệp điều khiển.
 
 ## Công nghệ sử dụng
 
 - Python 3.10 trở lên.
 - TCP Socket và đa luồng.
-- JSON message protocol với length-prefix framing.
+- JSON UTF-8 với length-prefix framing.
 - PySide6 cho giao diện desktop.
 - `cryptography` cho AES-256-GCM và PBKDF2-HMAC-SHA256.
 - SHA-256 để kiểm tra tính toàn vẹn của file.
@@ -52,46 +115,52 @@ Bootstrap Server không giải mã nội dung chat hoặc nội dung file. Tuy n
 ```text
 Chat-P2P/
 ├── bootstrap/
-│   └── server.py                 # Bootstrap/Tracker Server
+│   └── server.py                   # Bootstrap/Tracker Server
 ├── common/
-│   ├── protocol.py               # Giao thức, encode/decode thông điệp
-│   └── utils.py                  # Hàm tiện ích
+│   ├── protocol.py                 # Giao thức và framing thông điệp
+│   └── utils.py                    # Các hàm tiện ích
 ├── peer/
 │   ├── file_transfer/
-│   │   └── manager.py            # Quản lý truyền file mã hóa
+│   │   └── manager.py              # Chia sẻ và tải file theo yêu cầu
 │   ├── gui/
-│   │   ├── widgets/              # Message bubble, file card, conversation item
-│   │   ├── bridge.py             # Cầu nối backend và Qt signal
-│   │   ├── dialogs.py            # Hộp thoại nhóm và nhận file
-│   │   ├── main_window.py        # Cửa sổ chính
-│   │   ├── models.py             # Model dữ liệu GUI
-│   │   └── styles.py             # Giao diện QSS
-│   ├── cli.py                    # Giao diện dòng lệnh
-│   ├── client.py                 # Kết nối bootstrap và gửi tới peer
-│   ├── crypto.py                 # Mã hóa AES-256-GCM
-│   ├── node.py                   # Điều phối Peer Node
-│   ├── peer_manager.py           # Quản lý peer và nhóm
-│   └── server.py                 # TCP server của peer
-├── config.py                     # Cấu hình mặc định
-├── requirements-gui.txt          # Thư viện cho GUI và mã hóa
-├── run_bootstrap.py              # Chạy Bootstrap Server
-├── run_peer.py                   # Chạy peer dạng CLI
-├── run_peer_gui.py               # Chạy peer dạng GUI
-└── test_system.py                # Kiểm thử hệ thống
+│   │   ├── widgets/
+│   │   │   ├── conversation_item.py
+│   │   │   ├── file_transfer_card.py
+│   │   │   └── message_bubble.py
+│   │   ├── bridge.py               # Qt signal giữa backend và GUI
+│   │   ├── churn_dialog.py         # Hộp thoại mô phỏng churn
+│   │   ├── dialogs.py              # Các hộp thoại ứng dụng
+│   │   ├── group_service.py        # Hỗ trợ dữ liệu nhóm cho GUI
+│   │   ├── launch_dialog.py        # Màn hình nhập thông tin kết nối
+│   │   ├── main_window.py          # Cửa sổ chat chính
+│   │   ├── models.py               # Model hội thoại và tin nhắn
+│   │   └── styles.py               # QSS giao diện
+│   ├── churn.py                    # Bộ điều khiển churn
+│   ├── cli.py                      # Giao diện dòng lệnh
+│   ├── client.py                   # Kết nối Bootstrap và gửi tới peer
+│   ├── crypto.py                   # Mã hóa AES-256-GCM
+│   ├── node.py                     # Điều phối vòng đời Peer Node
+│   ├── peer_manager.py             # Quản lý peer và nhóm
+│   └── server.py                   # TCP server của peer
+├── config.py                       # Cấu hình mặc định
+├── requirements-gui.txt            # Thư viện cần thiết
+├── run_bootstrap.py                # Chạy Bootstrap Server
+├── run_peer.py                     # Chạy peer dạng CLI
+├── run_peer_gui.py                 # Chạy peer dạng GUI
+├── start_chat_gui.bat              # Khởi động GUI nhanh trên Windows
+└── test_system.py                  # Kiểm thử nền tảng hệ thống
 ```
 
 ## Cài đặt
 
 ### 1. Tải mã nguồn
 
-Clone đúng nhánh `dev/hung`:
-
 ```bash
 git clone --branch dev/hung --single-branch https://github.com/lequangduccode/Chat-P2P.git
 cd Chat-P2P
 ```
 
-Hoặc tải file ZIP của project và giải nén.
+Hoặc tải file ZIP và giải nén.
 
 ### 2. Tạo môi trường ảo
 
@@ -99,17 +168,9 @@ Hoặc tải file ZIP của project và giải nén.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Nếu PowerShell chặn script trong phiên terminal hiện tại:
-
-```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 .\.venv\Scripts\Activate.ps1
 ```
-
-Dòng `(.venv)` xuất hiện trước dấu nhắc PowerShell chỉ cho biết môi trường ảo đang được kích hoạt, không phải lỗi.
 
 #### Linux/macOS
 
@@ -125,9 +186,16 @@ python -m pip install --upgrade pip
 pip install -r requirements-gui.txt
 ```
 
+Các thư viện chính:
+
+```text
+PySide6>=6.7,<7
+cryptography>=42,<46
+```
+
 ## Chạy ứng dụng trên một máy
 
-Cần mở ít nhất ba terminal: một terminal chạy Bootstrap Server và hai terminal chạy hai peer khác nhau.
+Mở một terminal cho Bootstrap Server và một terminal riêng cho mỗi peer.
 
 ### Terminal 1 – Bootstrap Server
 
@@ -135,89 +203,182 @@ Cần mở ít nhất ba terminal: một terminal chạy Bootstrap Server và ha
 python run_bootstrap.py
 ```
 
-Mặc định Bootstrap Server chạy tại `127.0.0.1:9000`.
+Mặc định server chạy tại:
 
-### Terminal 2 – Alice
-
-```bash
-python run_peer_gui.py --username Alice --port 9001
+```text
+127.0.0.1:9000
 ```
 
-### Terminal 3 – Bob
+### Terminal 2 – Peer thứ nhất
 
 ```bash
-python run_peer_gui.py --username Bob --port 9002
+python run_peer_gui.py
 ```
 
-Có thể mở thêm peer:
+Nhập ví dụ:
+
+```text
+Tên người dùng: Alice
+Cổng peer: 9001
+Bootstrap host: 127.0.0.1
+Bootstrap port: 9000
+Khóa mã hóa: DoAn-P2P-2026-Secret
+```
+
+### Terminal 3 – Peer thứ hai
 
 ```bash
-python run_peer_gui.py --username Charlie --port 9003
+python run_peer_gui.py
 ```
 
-Mỗi peer trên cùng một máy phải sử dụng một cổng khác nhau.
+Nhập tên `Bob`, cổng `9002` và cùng khóa mã hóa với Alice.
 
-## Cấu hình khóa mã hóa
+Mỗi peer chạy trên cùng một máy phải dùng một cổng khác nhau.
 
-Ứng dụng có khóa mặc định `p2p-chat-demo-2026` để thuận tiện khi chạy thử. Trong triển khai thực tế, nên đặt một khóa riêng có ít nhất 8 ký tự và bảo đảm tất cả peer sử dụng cùng một khóa.
-
-### Cách 1 – Truyền khóa trực tiếp khi chạy
+## Chạy GUI hoàn toàn bằng tham số dòng lệnh
 
 ```powershell
-python run_peer_gui.py --username Alice --port 9001 --encryption-key "DoAn-P2P-2026-Secret"
-python run_peer_gui.py --username Bob --port 9002 --encryption-key "DoAn-P2P-2026-Secret"
+python run_peer_gui.py --no-launcher `
+  --username Alice `
+  --port 9001 `
+  --bootstrap-host 127.0.0.1 `
+  --bootstrap-port 9000 `
+  --encryption-key "DoAn-P2P-2026-Secret"
 ```
 
-### Cách 2 – Đặt biến môi trường cho terminal hiện tại
+Viết trên một dòng:
+
+```powershell
+python run_peer_gui.py --no-launcher --username Alice --port 9001 --bootstrap-host 127.0.0.1 --bootstrap-port 9000 --encryption-key "DoAn-P2P-2026-Secret"
+```
+
+Khi dùng `--no-launcher`, bắt buộc phải có `username`, `port` và khóa mã hóa.
+
+## Khóa mã hóa
+
+Tất cả peer muốn trao đổi dữ liệu phải sử dụng cùng một khóa.
+
+Có thể truyền trực tiếp:
+
+```powershell
+python run_peer_gui.py --no-launcher --username Alice --port 9001 --encryption-key "DoAn-P2P-2026-Secret"
+```
+
+Hoặc đặt biến môi trường trong PowerShell:
 
 ```powershell
 $env:P2P_ENCRYPTION_KEY = "DoAn-P2P-2026-Secret"
-python run_peer_gui.py --username Alice --port 9001
+python run_peer_gui.py
 ```
 
-Biến trên chỉ tồn tại trong cửa sổ PowerShell hiện tại. Khi mở terminal mới, cần đặt lại.
-
-### Cách 3 – Lưu biến môi trường lâu dài trên Windows
+Lưu lâu dài trên Windows:
 
 ```powershell
 setx P2P_ENCRYPTION_KEY "DoAn-P2P-2026-Secret"
 ```
 
-Sau khi chạy `setx`, đóng và mở lại PowerShell. Không nên commit khóa thật vào GitHub hoặc ghi trực tiếp vào source code.
+Sau khi dùng `setx`, cần mở cửa sổ terminal mới.
 
-Khi các peer dùng cùng khóa, giao diện sẽ hiển thị cùng một **Key ID**. Nếu khóa không khớp, peer nhận sẽ không thể xác thực và giải mã tin nhắn hoặc file.
+Không nên commit khóa thật lên GitHub hoặc ghi trực tiếp khóa dùng trong triển khai vào source code.
 
 ## Sử dụng giao diện
 
 ### Nhắn tin riêng
 
-1. Chọn một peer trong danh sách bên trái.
-2. Nhập nội dung vào ô soạn tin.
-3. Nhấn **Gửi** hoặc phím Enter.
+1. Chọn một peer trong danh sách hội thoại.
+2. Nhập nội dung.
+3. Nhấn **Gửi** hoặc Enter.
 
-### Tạo và chat nhóm
+### Broadcast
 
-1. Nhấn **Tạo nhóm**.
-2. Nhập tên nhóm và chọn thành viên.
-3. Chọn nhóm trong danh sách hội thoại rồi gửi tin nhắn.
+Chức năng broadcast gửi nội dung tới tất cả peer đang online. Peer offline không nhận broadcast tại thời điểm gửi.
 
-### Gửi file
+### Tạo nhóm
 
-1. Chọn một peer đang online.
-2. Nhấn nút đính kèm cạnh ô nhập tin nhắn.
-3. Chọn file cần gửi.
-4. Người nhận chọn vị trí lưu và chấp nhận đề nghị.
-5. Theo dõi tiến trình ngay trong thẻ truyền file.
+1. Nhấn nút tạo nhóm.
+2. Nhập tên nhóm.
+3. Chọn các thành viên.
+4. Xác nhận tạo nhóm.
+5. Chọn nhóm trong danh sách để nhắn tin hoặc chia sẻ file.
 
-Lưu ý:
+### Chia sẻ file trong chat riêng
 
-- Chỉ hỗ trợ gửi file trực tiếp cho một peer đang online.
-- Kích thước tối đa là 100 MB.
-- File được chia thành các chunk 256 KB và mỗi chunk được mã hóa AES-256-GCM.
-- Sau khi nhận xong, ứng dụng kiểm tra kích thước và SHA-256 của file.
-- Không đóng ứng dụng hoặc ngắt mạng khi đang truyền file.
+1. Mở hội thoại với peer cần chia sẻ.
+2. Nhấn nút đính kèm.
+3. Chọn file.
+4. Ứng dụng tính SHA-256 và đăng thẻ file vào hội thoại.
+5. Người nhận bấm **Tải xuống** khi muốn tải.
+6. Người nhận chọn thư mục và tên file đích.
 
-## Chạy trên nhiều máy trong cùng mạng LAN
+### Chia sẻ file trong nhóm
+
+1. Mở hội thoại nhóm.
+2. Nhấn nút đính kèm.
+3. Chọn file.
+4. Metadata file được gửi tới các thành viên nhóm.
+5. Mỗi thành viên tự bấm **Tải xuống** và tải file trực tiếp từ người gửi.
+
+### Trạng thái thẻ file
+
+Một thẻ file có thể hiển thị các trạng thái:
+
+- `preparing`: đang tính SHA-256.
+- `shared`: đã chia sẻ metadata.
+- `available`: sẵn sàng tải xuống.
+- `connecting`: đang yêu cầu tải.
+- `waiting`: chờ kết nối truyền dữ liệu.
+- `transferring`: đang tải file.
+- `completed`: đã tải xong.
+- `failed`: tải thất bại.
+- `cancelled`: đã hủy tải.
+
+### Điều kiện để tải file
+
+- File phải còn tồn tại tại đường dẫn gốc trên máy người gửi.
+- Người gửi phải đang chạy ứng dụng và online khi thành viên bấm tải.
+- Hai peer phải kết nối được trực tiếp tới cổng TCP của nhau.
+- Tất cả peer phải dùng cùng khóa mã hóa.
+- File không được rỗng và không vượt quá 100 MB.
+
+Việc gửi metadata có thể được lưu chờ khi thành viên offline, nhưng dữ liệu file chỉ truyền khi người gửi và người tải cùng online.
+
+## Mô phỏng churn
+
+### Cách sử dụng
+
+1. Mở ứng dụng GUI.
+2. Nhấn **Mô phỏng churn**.
+3. Nhập thời gian online, thời gian offline và số vòng.
+4. Bật jitter nếu muốn thời gian dao động ngẫu nhiên.
+5. Nhấn bắt đầu.
+
+Cấu hình mặc định trong code:
+
+```text
+Online: 10 giây
+Offline: 5 giây
+Số vòng: 3
+Jitter: 0 giây
+```
+
+### Hành vi khi peer offline do churn
+
+- Gửi `UNREGISTER` tới Bootstrap Server.
+- Dừng nhận kết nối tại TCP server của peer.
+- Peer khác nhận trạng thái rời mạng.
+- Không thể gửi tin hoặc tải file trực tiếp trong giai đoạn offline.
+- Các phiên truyền file đang hoạt động có thể bị hủy.
+
+### Hành vi khi peer online lại
+
+- Mở lại TCP server trên cùng cổng.
+- Đăng ký lại với cùng `peer_id` và username.
+- Đồng bộ lại danh sách peer.
+- Tiếp tục nhận các thông điệp đang chờ.
+
+Khi dừng mô phỏng, controller cố gắng đưa peer trở lại trạng thái online.
+
+## Chạy trên nhiều máy trong mạng LAN
 
 ### Máy chạy Bootstrap Server
 
@@ -225,56 +386,57 @@ Lưu ý:
 python run_bootstrap.py --host 0.0.0.0 --port 9000
 ```
 
-Xác định địa chỉ IPv4 của máy này, ví dụ `192.168.1.100`, và cho phép cổng `9000` qua Windows Firewall.
+Giả sử IPv4 của máy Bootstrap là `192.168.1.100`.
 
 ### Máy chạy peer
 
-```bash
-python run_peer_gui.py \
-  --username Alice \
-  --port 9001 \
-  --bootstrap-host 192.168.1.100 \
-  --bootstrap-port 9000
-```
-
-Trên Windows PowerShell có thể viết trên một dòng:
-
 ```powershell
-python run_peer_gui.py --username Alice --port 9001 --bootstrap-host 192.168.1.100 --bootstrap-port 9000
+python run_peer_gui.py --no-launcher --username Alice --port 9001 --bootstrap-host 192.168.1.100 --bootstrap-port 9000 --encryption-key "DoAn-P2P-2026-Secret"
 ```
 
-Mỗi máy peer cũng cần cho phép cổng peer tương ứng qua firewall để nhận tin nhắn và kết nối truyền file trực tiếp.
+Các máy cần:
+
+- Ở cùng mạng LAN hoặc định tuyến được tới nhau.
+- Cho phép cổng Bootstrap qua firewall.
+- Cho phép cổng lắng nghe của từng peer qua firewall.
+- Không dùng trùng username trong cùng hệ thống.
 
 ## Giao diện dòng lệnh
 
-Khởi động các peer dạng CLI:
+Chạy peer CLI:
 
 ```bash
 python run_peer.py --username Alice --port 9001
 python run_peer.py --username Bob --port 9002
 ```
 
-Một số lệnh cơ bản:
+Bật log chi tiết cho CLI:
 
-```text
-list                            Xem danh sách peer
-msg Bob Xin chào!               Gửi tin nhắn riêng
-broadcast Thông báo chung       Gửi tới các peer online
-group create Team Bob Charlie   Tạo nhóm
-group msg Team Họp lúc 15h      Gửi tin nhắn nhóm
-groups                          Xem danh sách nhóm
-help                            Xem trợ giúp
-quit                            Thoát
+```bash
+python run_peer.py --username Alice --port 9001 --debug
 ```
 
-GUI là chế độ được khuyến nghị cho chức năng truyền file.
+Các lệnh hiện có:
+
+```text
+list                              Xem peer đang online
+msg Bob Xin chào!                 Gửi tin nhắn trực tiếp
+broadcast Thông báo chung         Gửi tới các peer online
+groups                            Xem danh sách nhóm
+group create Team Bob Charlie     Tạo nhóm
+group msg Team Họp lúc 15h        Gửi tin nhắn nhóm
+help                              Hiển thị trợ giúp
+quit                              Thoát
+```
+
+Các chức năng GUI như chia sẻ file và mô phỏng churn chưa được cung cấp thành lệnh CLI tương tác.
 
 ## Giao thức truyền thông
 
-Thông điệp điều khiển sử dụng JSON UTF-8 với 4 byte độ dài ở đầu:
+Thông điệp điều khiển được đóng khung:
 
 ```text
-[4-byte big-endian length][N-byte JSON payload]
+[4-byte big-endian length][N-byte JSON UTF-8]
 ```
 
 Các nhóm thông điệp chính:
@@ -282,81 +444,167 @@ Các nhóm thông điệp chính:
 | Nhóm | Loại thông điệp |
 |---|---|
 | Bootstrap | `REGISTER`, `REGISTER_OK`, `UNREGISTER`, `HEARTBEAT`, `GET_PEERS`, `PEER_LIST` |
-| Trạng thái peer | `PEER_JOINED`, `PEER_LEFT` |
-| Chat | `DIRECT_MSG`, `GROUP_MSG`, `GROUP_INVITE`, `ACK` |
-| Truyền file | `FILE_OFFER`, `FILE_ACCEPT`, `FILE_REJECT`, `FILE_CANCEL`, `FILE_STREAM_BEGIN`, `FILE_STREAM_RESULT` |
+| Trạng thái | `PEER_JOINED`, `PEER_LEFT` |
+| Chat | `DIRECT_MSG`, `BROADCAST_MSG`, `GROUP_MSG`, `GROUP_INVITE`, `ACK` |
+| File | `FILE_SHARE`, `FILE_DOWNLOAD_REQUEST`, `FILE_CANCEL`, `FILE_STREAM_BEGIN`, `FILE_STREAM_RESULT` |
+
+### Luồng giao thức file
+
+```text
+Người gửi                                  Người nhận
+    │                                           │
+    │──── FILE_SHARE (metadata) ───────────────►│
+    │                                           │
+    │                         Người dùng bấm tải │
+    │◄── FILE_DOWNLOAD_REQUEST + host/port ─────│
+    │                                           │
+    │──── FILE_STREAM_BEGIN ───────────────────►│
+    │──── encrypted chunk 0 ───────────────────►│
+    │──── encrypted chunk 1 ───────────────────►│
+    │──── ... ─────────────────────────────────►│
+    │──── zero-length marker ──────────────────►│
+    │◄── FILE_STREAM_RESULT ────────────────────│
+```
+
+Mỗi chunk có kích thước tối đa khoảng `256 KB` trước khi mã hóa. Thời gian timeout cho một phiên truyền file là `60 giây`.
 
 ## Cơ chế bảo mật
 
 - Passphrase được dẫn xuất thành khóa 256-bit bằng PBKDF2-HMAC-SHA256.
-- Tin nhắn và từng chunk file sử dụng nonce ngẫu nhiên 96-bit.
-- AES-GCM vừa mã hóa vừa xác thực dữ liệu.
-- Associated Data ràng buộc bản mã với một số metadata định tuyến.
-- Key ID là fingerprint rút gọn để đối chiếu khóa, không phải khóa bí mật.
+- Nội dung chat được mã hóa bằng AES-256-GCM.
+- Từng chunk file được mã hóa độc lập bằng AES-256-GCM.
+- Associated Data liên kết bản mã với phiên chia sẻ, yêu cầu tải và chỉ số chunk.
+- SHA-256 được tính trước khi chia sẻ và đối chiếu sau khi tải.
+- File tạm dùng hậu tố `.part` và chỉ được đổi sang tên chính thức sau khi kiểm tra thành công.
 
-Đây là mô hình khóa dùng chung phục vụ đồ án và mạng tin cậy. Hệ thống hiện chưa triển khai trao đổi khóa bất đối xứng, chứng thực danh tính bằng chứng thư số hoặc forward secrecy.
+Đây là mô hình khóa dùng chung phục vụ đồ án. Hệ thống chưa triển khai ECDH/RSA để trao đổi khóa, chứng thư số, forward secrecy hoặc xác thực danh tính mạnh.
 
 ## Kiểm thử
 
-Chạy bộ kiểm thử tích hợp:
+Chạy bộ kiểm thử hiện có:
 
 ```bash
 python test_system.py
 ```
 
-Có thể chạy ứng dụng với log chi tiết:
+Bộ kiểm thử hiện tập trung vào:
 
-```bash
-python run_peer_gui.py --username Alice --port 9001 --debug
-```
+- Encode/decode giao thức.
+- Đăng ký Bootstrap Server.
+- Khám phá peer.
+- Chat trực tiếp.
+- Chat nhóm.
+- Store-and-forward.
+- Retry khi kết nối thất bại.
+
+Các luồng GUI, tải file theo yêu cầu, gửi file nhóm và churn nên được kiểm thử tích hợp riêng khi hoàn thiện sản phẩm.
+
+## Kịch bản kiểm thử đề xuất
+
+### Kiểm thử chia sẻ file trực tiếp
+
+1. Khởi động Alice và Bob.
+2. Alice chia sẻ file cho Bob.
+3. Xác nhận file chưa tự động xuất hiện trong thư mục Downloads của Bob.
+4. Bob bấm **Tải xuống**.
+5. Chọn vị trí lưu.
+6. So sánh SHA-256 hoặc nội dung hai file.
+
+### Kiểm thử file nhóm
+
+1. Tạo nhóm gồm Alice, Bob và Charlie.
+2. Alice chia sẻ một file trong nhóm.
+3. Bob tải file.
+4. Charlie chưa tải và vẫn chỉ nhìn thấy thẻ file.
+5. Charlie tải file ở thời điểm khác.
+6. Kiểm tra cả hai bản tải đều khớp file gốc.
+
+### Kiểm thử peer gửi offline
+
+1. Alice chia sẻ file vào nhóm.
+2. Alice chuyển offline hoặc đóng ứng dụng.
+3. Bob bấm tải và xác nhận ứng dụng báo người gửi offline.
+4. Alice online lại.
+5. Bob bấm tải lại và xác nhận tải thành công.
+
+### Kiểm thử churn
+
+1. Chạy ít nhất hai peer.
+2. Bật churn trên một peer với chu kỳ ngắn.
+3. Quan sát peer còn lại nhận `PEER_LEFT` và `PEER_JOINED`.
+4. Gửi tin trong lúc peer churn đang offline.
+5. Kiểm tra dữ liệu chờ được chuyển khi peer online lại.
 
 ## Xử lý lỗi thường gặp
 
 ### Không kết nối được Bootstrap Server
 
 - Kiểm tra `run_bootstrap.py` đang chạy.
-- Kiểm tra đúng IP và cổng Bootstrap.
+- Kiểm tra đúng host và port.
 - Kiểm tra firewall hoặc antivirus.
+- Kiểm tra cổng Bootstrap chưa bị ứng dụng khác sử dụng.
+
+### Không mở được peer
+
+- Không dùng trùng username.
+- Không dùng trùng cổng peer trên cùng máy.
+- Cổng peer phải từ `1024–65535`.
+- Kiểm tra cổng chưa bị tiến trình khác chiếm.
 
 ### Hai peer không nhìn thấy nhau
 
-- Không dùng trùng username hoặc cổng trên cùng máy.
-- Đợi chu kỳ đồng bộ danh sách peer hoặc khởi động lại peer.
-- Khi chạy LAN, kiểm tra các máy cùng mạng và có thể ping lẫn nhau.
+- Kiểm tra cả hai đã đăng ký thành công.
+- Kiểm tra địa chỉ IP mà peer công bố có thể truy cập được.
+- Chờ chu kỳ làm mới danh sách hoặc khởi động lại peer.
+- Trong LAN, kiểm tra ping và firewall giữa các máy.
 
 ### Không giải mã được tin nhắn hoặc file
 
-- Kiểm tra tất cả peer dùng cùng `P2P_ENCRYPTION_KEY`.
-- So sánh Key ID hiển thị trên giao diện.
-- Khởi động lại peer sau khi thay biến môi trường.
+- Bảo đảm tất cả peer dùng cùng khóa.
+- Không thay khóa khi ứng dụng đang chạy.
+- Khởi động lại peer sau khi đổi biến môi trường.
 
-### Không gửi được file
+### Không chia sẻ được file
 
-- Người nhận phải đang online.
-- File phải nhỏ hơn hoặc bằng 100 MB và không được rỗng.
-- Kiểm tra cổng peer không bị firewall chặn.
-- Bảo đảm đủ quyền đọc file nguồn và quyền ghi tại thư mục đích.
+- File phải tồn tại và có quyền đọc.
+- File không được rỗng.
+- File không vượt quá 100 MB.
+- Hội thoại hoặc nhóm phải tồn tại.
 
-## Repository
+### Không tải được file
 
-Nhánh phát triển của phiên bản này:
+- Người gửi phải online.
+- File gốc không được di chuyển, đổi tên hoặc xóa sau khi chia sẻ.
+- Cổng peer nhận phải cho phép kết nối vào.
+- Thư mục đích phải có quyền ghi.
+- Thử tải lại nếu kết nối bị gián đoạn.
+
+### File bị trùng tên
+
+Nếu đường dẫn đích đã tồn tại tại thời điểm hoàn tất, ứng dụng tự tạo tên mới theo dạng:
 
 ```text
-https://github.com/lequangduccode/Chat-P2P/tree/dev/hung
+ten-file (1).ext
+ten-file (2).ext
 ```
 
-## Phạm vi và định hướng phát triển
+## Giới hạn hiện tại
 
-Một số hướng mở rộng phù hợp:
+- Bootstrap Server vẫn là điểm trung tâm cho discovery và store-and-forward.
+- File chỉ tải được khi peer sở hữu file đang online.
+- Chưa hỗ trợ resume một file đang tải dở.
+- Chưa hỗ trợ NAT traversal qua Internet công cộng.
+- Lịch sử GUI chủ yếu được giữ trong phiên chạy hiện tại.
+- Nhóm chưa có cơ chế đồng thuận hoặc quản trị thành viên nâng cao.
+- Một khóa dùng chung được sử dụng cho toàn mạng thử nghiệm.
 
-- Trao đổi khóa bằng RSA/ECDH thay cho khóa dùng chung.
-- Xác thực danh tính peer và chống giả mạo.
-- Lưu lịch sử hội thoại bằng cơ sở dữ liệu.
-- Resume truyền file khi mất kết nối.
-- Truyền file trong nhóm.
-- NAT traversal để hoạt động qua Internet.
+## Hướng phát triển
+
+- Trao đổi khóa bằng ECDH và xác thực peer.
+- Lưu lịch sử hội thoại bằng SQLite hoặc cơ sở dữ liệu phân tán.
+- Resume và retry truyền file theo chunk.
+- Lưu metadata file bền vững qua nhiều lần khởi động.
+- Hỗ trợ NAT traversal bằng STUN/TURN hoặc relay.
+- Phân quyền quản trị nhóm.
+- Kiểm thử tự động cho file nhóm, churn và GUI.
 - Đóng gói ứng dụng Windows bằng PyInstaller.
-
-## Giấy phép
-
-Project phục vụ mục đích học tập và nghiên cứu. Hãy bổ sung tệp `LICENSE` nếu muốn công bố với một giấy phép mã nguồn mở cụ thể.
